@@ -1,0 +1,25 @@
+# Internal reverse proxy: one origin -> the right service (for the Cloudflare Tunnel).
+# Caddy listens on :8099 (http, no TLS — cloudflared provides HTTPS). WebSockets pass through.
+:8099 {
+	handle /v1/agent/stream* {
+		reverse_proxy websocket-gateway:8000
+	}
+	handle /v1/usage_stt* {
+		reverse_proxy stt-service:8001
+	}
+	handle /v1/stt/backend* {
+		reverse_proxy stt-service:8001
+	}
+	handle /v1/tts* {
+		reverse_proxy tts-service:8002
+	}
+	handle /admin* {
+		reverse_proxy api-gateway:8080
+	}
+	handle /v1/* {
+		reverse_proxy api-gateway:8080
+	}
+	handle {
+		reverse_proxy dashboard:3000
+	}
+}
