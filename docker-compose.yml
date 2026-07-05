@@ -1,0 +1,179 @@
+# Voice AI Platform — full local stack.
+#   cp .env.example .env  (fill keys)  ->  docker compose up --build
+# Profiles:
+#   default          : core pipeline (browser voice agent) — Phase 1
+#   --profile telephony : + Asterisk + telephony-service    — Phase 2
+#   --profile monitoring: + Prometheus + Grafana
+#   --profile gpu    : GPU-enabled stt/tts variants (see overrides below)
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: voice
+      POSTGRES_PASSWORD: voice
+      POSTGRES_DB: voiceai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports: ["5432:5432"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U voice"], interval: 5s, retries: 10 }
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2.10
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./infra/nats/nats.conf:/etc/nats/nats.conf
+      - natsdata:/data
+    ports: ["4222:4222", "8222:8222"]
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes: [ "miniodata:/data" ]
+    ports: ["9000:9000", "9001:9001"]
+
+  stt-service:
+    build: { context: ., dockerfile: services/stt-service/Dockerfile }
+    environment:
+      STT_BACKEND: ${STT_BACKEND:-whisper}          # whisper (self-hosted) | openai | groq
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_STT_MODEL: ${OPENAI_STT_MODEL:-gpt-4o-transcribe}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_STT_MODEL: ${GROQ_STT_MODEL:-whisper-large-v3}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-auto}
+      WHISPER_COMPUTE: ${WHISPER_COMPUTE:-default}
+      STT_SILENCE_FLUSH_S: ${STT_SILENCE_FLUSH_S:-0.9}
+      STT_PARTIAL_INTERVAL_S: ${STT_PARTIAL_INTERVAL_S:-1.0}
+      STT_MIN_SPEECH_S: ${STT_MIN_SPEECH_S:-0.45}
+      STT_PREPROCESS: ${STT_PREPROCESS:-1}        # clean audio before STT (DC/rumble + normalize)
+      STT_POSTPROCESS: ${STT_POSTPROCESS:-1}      # strip Whisper hallucination phrases + repeats
+      STT_PROMPT: ${STT_PROMPT:-}                 # optional domain vocab hint for accuracy
+      STT_DEBUG_DUMP: ${STT_DEBUG_DUMP:-0}
+      STT_LANG: ${STT_LANG:-}
+      VOICE_DIR: /app/voices
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports: ["8001:8001"]
+    volumes: [ "hfcache:/root/.cache", "./voices:/app/voices" ]   # models + debug WAV dumps
+    # GPU: uncomment for CUDA
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }] } } }
+
+  tts-service:
+    build:
+      context: .
+      dockerfile: services/tts-service/Dockerfile
+      args: { TTS_EXTRA: "${TTS_EXTRA:-}" }   # e.g. "kokoro soundfile" for real voices
+    environment:
+      TTS_BACKEND: ${TTS_BACKEND:-espeak}     # espeak=plumbing test; kokoro/f5tts=real quality
+      KOKORO_SPEED: ${KOKORO_SPEED:-0.9}      # <1.0 = slower/calmer voice
+      KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    ports: ["8002:8002"]
+    volumes: [ "hfcache:/root/.cache", "./voices:/app/voices" ]
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }] } } }
+
+  conversation-service:
+    build: { context: ., dockerfile: services/conversation-service/Dockerfile }
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-300}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    ports: ["8003:8003"]
+    depends_on: [redis]
+
+  websocket-gateway:
+    build: { context: ., dockerfile: services/websocket-gateway/Dockerfile }
+    environment:
+      STT_WS: ws://stt-service:8001/v1/stt/stream
+      TTS_WS: ws://tts-service:8002/v1/tts/stream
+      CONV_URL: http://conversation-service:8003
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    ports: ["8000:8000"]
+    depends_on: [stt-service, tts-service, conversation-service]
+
+  api-gateway:
+    build: { context: ., dockerfile: services/api-gateway/Dockerfile }
+    environment:
+      POSTGRES_URL: postgresql://voice:voice@postgres:5432/voiceai
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-300}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      ALLOW_ADMIN: ${ALLOW_ADMIN:-true}
+    ports: ["8090:8080"]   # host 8090 (8080 is taken by another app on this VPS)
+    depends_on: { postgres: { condition: service_healthy } }
+
+  recording-service:
+    build: { context: ., dockerfile: services/recording-service/Dockerfile }
+    environment:
+      POSTGRES_URL: postgresql://voice:voice@postgres:5432/voiceai
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    ports: ["8005:8005"]
+    depends_on: [minio, postgres]
+
+  analytics-service:
+    build: { context: ., dockerfile: services/analytics-service/Dockerfile }
+    environment:
+      POSTGRES_URL: postgresql://voice:voice@postgres:5432/voiceai
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    ports: ["8006:8006"]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  dashboard:
+    build: { context: ., dockerfile: dashboard/Dockerfile }
+    ports: ["3000:3000"]
+
+  # ---------------- telephony profile (Phase 2) ----------------
+  asterisk:
+    profiles: [telephony]
+    build: { context: ., dockerfile: services/telephony-service/Dockerfile.asterisk }
+    network_mode: host          # simplest for SIP/RTP; or map 5060/udp + RTP range
+    environment:
+      SIP_TRUNK_USER: ${SIP_TRUNK_USER:-}
+      SIP_TRUNK_PASS: ${SIP_TRUNK_PASS:-}
+
+  telephony-service:
+    profiles: [telephony]
+    build: { context: ., dockerfile: services/telephony-service/Dockerfile }
+    environment:
+      ARI_URL: http://host.docker.internal:8088
+      GW_WS: ws://websocket-gateway:8000/v1/agent/stream
+      SIP_DID_NUMBER: ${SIP_DID_NUMBER:-}
+      DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+    extra_hosts: [ "host.docker.internal:host-gateway" ]
+    ports: ["8004:8004", "18000-18020:18000-18020/udp"]
+
+  # ---------------- monitoring profile ----------------
+  prometheus:
+    profiles: [monitoring]
+    image: prom/prometheus
+    volumes: [ "./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml" ]
+    ports: ["9090:9090"]
+
+  grafana:
+    profiles: [monitoring]
+    image: grafana/grafana
+    ports: ["3001:3000"]
+    environment: { GF_SECURITY_ADMIN_PASSWORD: admin }
+
+volumes:
+  pgdata: {}
+  natsdata: {}
+  miniodata: {}
+  hfcache: {}

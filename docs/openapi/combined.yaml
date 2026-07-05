@@ -1,0 +1,56 @@
+openapi: 3.0.3
+info:
+  title: Voice AI Platform API
+  version: 1.0.0
+  description: >
+    Unified public API (via api-gateway :8080). All endpoints require
+    `Authorization: Bearer <api_key>`. Live per-service interactive docs at each
+    service's /docs (FastAPI auto-generated).
+servers:
+  - url: http://localhost:8080
+security: [ { bearerAuth: [] } ]
+paths:
+  /v1/tts:
+    post:
+      summary: Synthesize speech
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [text], properties: { text: {type: string}, voice: {type: string} } }
+      responses:
+        "200": { description: WAV audio; X-First-Chunk-Ms header = latency, content: { audio/wav: {} } }
+  /v1/tts/voices:
+    get: { summary: List voices, responses: { "200": { description: Voice list } } }
+    post: { summary: Clone voice (multipart name + wav), responses: { "200": { description: voice_id } } }
+  /v1/stt:
+    post:
+      summary: Batch transcription (multipart file)
+      responses: { "200": { description: "{text, language, duration_s, latency_ms}" } }
+  /v1/sessions:
+    post: { summary: Create conversation session, responses: { "200": { description: "{session_id}" } } }
+  /v1/sessions/{sid}/turn:
+    post: { summary: "User text in -> SSE sentence stream out", responses: { "200": { description: text/event-stream } } }
+  /v1/sessions/{sid}/interrupt:
+    post: { summary: Barge-in — abort current generation, responses: { "200": { description: ok } } }
+  /v1/calls:
+    post:
+      summary: Originate outbound call
+      requestBody: { content: { application/json: { schema: { type: object, required: [to], properties: { to: {type: string}, agent_prompt: {type: string} } } } } }
+      responses: { "200": { description: "{call_id, status}" } }
+  /v1/calls/{id}:
+    get: { summary: Call status, responses: { "200": { description: status object } } }
+  /v1/calls/{id}/hangup:
+    post: { summary: Hang up, responses: { "200": { description: ok } } }
+  /v1/recordings/{call_id}:
+    get: { summary: List recordings + presigned URLs, responses: { "200": { description: list } } }
+  /v1/recordings/{call_id}/transcript:
+    get: { summary: Fetch transcript, responses: { "200": { description: transcript JSON } } }
+  /v1/usage:
+    get: { summary: Tenant usage rollup (billing basis), responses: { "200": { description: usage object } } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+x-websocket-endpoints:
+  - ws://gateway:8000/v1/agent/stream   # full-duplex agent session (see websocket-gateway README)
+  - ws://stt:8001/v1/stt/stream         # streaming transcription
+  - ws://tts:8002/v1/tts/stream         # streaming synthesis

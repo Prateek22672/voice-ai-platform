@@ -1,0 +1,12 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+numpy<2.0
+num2words
+python-multipart
+nats-py
+# Pick ONE backend and install its extra:
+# kokoro backend:    pip install kokoro soundfile
+# f5tts backend:     pip install f5-tts
+# xtts backend:      pip install TTS
+# cosyvoice backend: see https://github.com/FunAudioLLM/CosyVoice
+# espeak backend:    apt install espeak-ng   (test/CI only)

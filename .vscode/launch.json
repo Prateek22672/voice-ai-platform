@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "stt-service", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/services/stt-service/app.py",
+      "cwd": "${workspaceFolder}/services/stt-service",
+      "env": { "DEV_API_KEY": "dev-test-key", "WHISPER_MODEL": "tiny" } },
+    { "name": "tts-service", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/services/tts-service/app.py",
+      "cwd": "${workspaceFolder}/services/tts-service",
+      "env": { "DEV_API_KEY": "dev-test-key", "TTS_BACKEND": "espeak" } },
+    { "name": "conversation-service", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/services/conversation-service/app.py",
+      "cwd": "${workspaceFolder}/services/conversation-service",
+      "env": { "DEV_API_KEY": "dev-test-key", "REDIS_URL": "redis://localhost:6379/0" } },
+    { "name": "websocket-gateway", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/services/websocket-gateway/app.py",
+      "cwd": "${workspaceFolder}/services/websocket-gateway",
+      "env": { "STT_WS": "ws://localhost:8001/v1/stt/stream",
+               "TTS_WS": "ws://localhost:8002/v1/tts/stream",
+               "CONV_URL": "http://localhost:8003" } },
+    { "name": "api-gateway", "type": "debugpy", "request": "launch",
+      "program": "${workspaceFolder}/services/api-gateway/app.py",
+      "cwd": "${workspaceFolder}/services/api-gateway",
+      "env": { "DEV_API_KEY": "dev-test-key" } }
+  ]
+}

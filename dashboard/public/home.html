@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice AI Platform — Home</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d26;
+    --border: #2a2f3a;
+    --text: #e6e6e6;
+    --muted: #8b949e;
+    --accent: #4f7cff;
+    --green: #3fb950;
+    --red: #e5484d;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 48px 20px 72px;
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    margin-bottom: 40px;
+  }
+
+  header h1 {
+    margin: 0 0 10px;
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  header p.subtitle {
+    margin: 0;
+    color: var(--muted);
+    font-size: 1.05rem;
+    max-width: 62ch;
+  }
+
+  /* ---------- Section headings ---------- */
+  h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 48px 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  p.section-note {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  /* ---------- Service status grid ---------- */
+  .service-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+
+  .service-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .service-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .service-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .dot.checking {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot.checking { animation: none; }
+    * { transition: none !important; }
+  }
+
+  .dot.up { background: var(--green); }
+  .dot.down { background: var(--red); }
+
+  .status.up-text { color: var(--green); }
+  .status.down-text { color: var(--red); }
+
+  .service-desc {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin: 0;
+    flex: 1;
+  }
+
+  .service-port {
+    font-size: 0.78rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .service-port code {
+    color: var(--text);
+    background: rgba(79, 124, 255, 0.12);
+    border: 1px solid rgba(79, 124, 255, 0.25);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.78rem;
+  }
+
+  /* ---------- Pipeline ---------- */
+  .pipeline-outer {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 18px 16px;
+  }
+
+  .pipeline-scroll {
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: max-content;
+    margin: 0 auto;
+    width: fit-content;
+  }
+
+  .stage {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .stage .stage-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .stage .stage-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .stage.endpoint {
+    border-color: rgba(79, 124, 255, 0.45);
+    background: rgba(79, 124, 255, 0.08);
+  }
+
+  .arrow {
+    color: var(--accent);
+    font-size: 1.05rem;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  .pipeline-caption {
+    margin: 14px 0 0;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  /* ---------- Navigation cards ---------- */
+  .nav-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  a.nav-card {
+    display: block;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  }
+
+  a.nav-card:hover {
+    border-color: var(--accent);
+    background: #1e2230;
+    transform: translateY(-2px);
+  }
+
+  a.nav-card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .nav-card h3 {
+    margin: 0 0 6px;
+    font-size: 1.15rem;
+    font-weight: 650;
+  }
+
+  .nav-card p {
+    margin: 0 0 10px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .nav-card .go {
+    color: var(--accent);
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+
+  /* ---------- Differentiator strip ---------- */
+  .diff-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+
+  .diff-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 0.88rem;
+  }
+
+  .diff-item strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.9rem;
+  }
+
+  .diff-item span {
+    color: var(--muted);
+    font-size: 0.83rem;
+  }
+
+  /* ---------- Footer ---------- */
+  footer {
+    margin-top: 56px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.8rem;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  footer button {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+
+  footer button:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  footer button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Voice AI Platform</h1>
+    <p class="subtitle">Self-hosted voice agents — your own Whisper, your own voice, your own phone line. No&nbsp;ElevenLabs, no&nbsp;Twilio.</p>
+  </header>
+
+  <section aria-labelledby="services-heading">
+    <h2 id="services-heading">Services</h2>
+    <p class="section-note">Every part of the stack runs on this machine. Status is checked live from your browser.</p>
+    <div class="service-grid" id="serviceGrid"></div>
+  </section>
+
+  <section aria-labelledby="pipeline-heading">
+    <h2 id="pipeline-heading">How one voice turn works</h2>
+    <p class="section-note">The path your voice takes, end to end — typically under two seconds.</p>
+    <div class="pipeline-outer">
+      <div class="pipeline-scroll">
+        <div class="pipeline" role="img" aria-label="Pipeline: you speak into the microphone, the Gateway routes audio, Whisper transcribes it to text, Groq generates the reply, Kokoro speaks it, and you hear the answer.">
+          <div class="stage endpoint">
+            <div class="stage-title">🎤 You</div>
+            <div class="stage-sub">speak</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="stage">
+            <div class="stage-title">Gateway</div>
+            <div class="stage-sub">routes audio</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="stage">
+            <div class="stage-title">Whisper</div>
+            <div class="stage-sub">speech → text</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="stage">
+            <div class="stage-title">Groq</div>
+            <div class="stage-sub">the AI thinks</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="stage">
+            <div class="stage-title">Kokoro</div>
+            <div class="stage-sub">text → voice</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="stage endpoint">
+            <div class="stage-title">🔊 You</div>
+            <div class="stage-sub">hear the reply</div>
+          </div>
+        </div>
+      </div>
+      <p class="pipeline-caption">You speak → transcribed → the AI thinks → spoken back, sentence by sentence. Barge-in supported (interrupt any time).</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="tools-heading">
+    <h2 id="tools-heading">Tools</h2>
+    <p class="section-note">Everything you need day to day lives in these two pages.</p>
+    <div class="nav-grid">
+      <a class="nav-card" href="voice-client.html">
+        <h3>🎙️ Talk to the Agent</h3>
+        <p>Have a live voice conversation in your browser.</p>
+        <span class="go">Open voice client →</span>
+      </a>
+      <a class="nav-card" href="voice-enroll.html">
+        <h3>🧑‍🏫 Train a Voice</h3>
+        <p>Record an employee's voice (~15s) and store it so the agent can speak in their voice.</p>
+        <span class="go">Open voice enrollment →</span>
+      </a>
+    </div>
+  </section>
+
+  <section aria-labelledby="diff-heading">
+    <h2 id="diff-heading">What makes this different</h2>
+    <p class="section-note">The reasons this runs here instead of on a vendor's cloud.</p>
+    <div class="diff-strip">
+      <div class="diff-item">
+        <strong>Runs on your hardware</strong>
+        <span>No per-minute vendor fees — the cost of a call is the cost of your electricity.</span>
+      </div>
+      <div class="diff-item">
+        <strong>Your data stays in-house</strong>
+        <span>Recordings and transcripts never leave your servers. DPDP-friendly by design.</span>
+      </div>
+      <div class="diff-item">
+        <strong>Swap models in one line</strong>
+        <span>Change the voice or the LLM with a single config change — no re-platforming.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Voice AI Platform — all services self-hosted on this machine.</span>
+    <button type="button" id="recheckBtn">Re-check status</button>
+  </footer>
+
+</div>
+
+<script>
+  "use strict";
+
+  var SERVICES = [
+    {
+      name: "Voice Gateway",
+      url: "http://localhost:8000/health",
+      port: 8000,
+      desc: "Realtime full-duplex voice sessions (the entry point your mic talks to)."
+    },
+    {
+      name: "Speech-to-Text (Whisper large-v3)",
+      url: "http://localhost:8001/health",
+      port: 8001,
+      desc: "Transcribes speech to text. Same Whisper model family OpenAI's API uses."
+    },
+    {
+      name: "Text-to-Speech (Kokoro)",
+      url: "http://localhost:8002/health",
+      port: 8002,
+      desc: "Natural neural voice. Also supports cloned employee voices (F5-TTS backend)."
+    },
+    {
+      name: "Conversation (Groq LLM)",
+      url: "http://localhost:8003/health",
+      port: 8003,
+      desc: "The brain — decides what to say. Groq Llama 3.3 70B, ~225ms."
+    },
+    {
+      name: "Recording",
+      url: "http://localhost:8005/health",
+      port: 8005,
+      desc: "Stores call recordings & transcripts (your servers, not a vendor)."
+    },
+    {
+      name: "Analytics",
+      url: "http://localhost:8006/health",
+      port: 8006,
+      desc: "Usage metrics, latency, cost basis."
+    },
+    {
+      name: "API Gateway",
+      url: "http://localhost:8080/health",
+      port: 8080,
+      desc: "Public REST front door with API keys."
+    }
+  ];
+
+  var grid = document.getElementById("serviceGrid");
+
+  function buildCards() {
+    grid.innerHTML = "";
+    SERVICES.forEach(function (svc, i) {
+      var card = document.createElement("div");
+      card.className = "service-card";
+
+      var top = document.createElement("div");
+      top.className = "service-top";
+
+      var name = document.createElement("div");
+      name.className = "service-name";
+      name.textContent = svc.name;
+
+      var status = document.createElement("span");
+      status.className = "status";
+      status.id = "status-" + i;
+
+      var dot = document.createElement("span");
+      dot.className = "dot checking";
+      dot.setAttribute("aria-hidden", "true");
+
+      var label = document.createElement("span");
+      label.textContent = "checking…";
+
+      status.appendChild(dot);
+      status.appendChild(label);
+      top.appendChild(name);
+      top.appendChild(status);
+
+      var desc = document.createElement("p");
+      desc.className = "service-desc";
+      desc.textContent = svc.desc;
+
+      var port = document.createElement("div");
+      port.className = "service-port";
+      port.innerHTML = "port <code>" + svc.port + "</code>";
+
+      card.appendChild(top);
+      card.appendChild(desc);
+      card.appendChild(port);
+      grid.appendChild(card);
+    });
+  }
+
+  function setStatus(i, up, text) {
+    var status = document.getElementById("status-" + i);
+    if (!status) { return; }
+    var dot = status.querySelector(".dot");
+    var label = status.querySelector("span:last-child");
+    dot.className = "dot " + (up ? "up" : "down");
+    status.className = "status " + (up ? "up-text" : "down-text");
+    label.textContent = text;
+  }
+
+  function checkService(svc, i) {
+    // no-cors reachability ping: the services don't send CORS headers, so we can't read
+    // the JSON body cross-origin from :3000. A no-cors fetch still RESOLVES when the port
+    // is up (opaque response) and REJECTS on connection refused — enough to show up/down.
+    var controller = ("AbortController" in window) ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 4000) : null;
+
+    fetch(svc.url, {
+      method: "GET",
+      mode: "no-cors",
+      cache: "no-store",
+      signal: controller ? controller.signal : undefined
+    })
+      .then(function () {
+        setStatus(i, true, "running");
+      })
+      .catch(function () {
+        setStatus(i, false, "unreachable");
+      })
+      .then(function () {
+        if (timer) { clearTimeout(timer); }
+      });
+  }
+
+  function checkAll() {
+    SERVICES.forEach(function (svc, i) {
+      var status = document.getElementById("status-" + i);
+      if (status) {
+        var dot = status.querySelector(".dot");
+        var label = status.querySelector("span:last-child");
+        dot.className = "dot checking";
+        status.className = "status";
+        label.textContent = "checking…";
+      }
+      checkService(svc, i);
+    });
+  }
+
+  buildCards();
+  checkAll();
+
+  document.getElementById("recheckBtn").addEventListener("click", checkAll);
+</script>
+</body>
+</html>

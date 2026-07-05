@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice AI — Voice Enrollment</title>
+<style>
+  :root{
+    --card:rgba(255,255,255,.03); --line:rgba(255,255,255,.1); --ink:#fff;
+    --mut:rgba(255,255,255,.55); --accent:#fff; --ok:#3fb950; --danger:#e5484d; --rec:#e5484d;
+    --field:rgba(255,255,255,.04);
+  }
+  *{box-sizing:border-box}
+  body{
+    font-family:system-ui,"Segoe UI",Roboto,sans-serif;
+    background:#000; color:var(--ink);
+    max-width:780px; margin:0 auto; padding:44px 20px 90px; line-height:1.55;
+  }
+  a{color:var(--ink);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .home{display:inline-block;font-size:13px;margin-bottom:20px;color:var(--mut)}
+  .home:hover{color:#fff;text-decoration:none}
+  h1{margin:0 0 6px;font-size:30px;letter-spacing:-.02em;font-weight:700}
+  .sub{color:var(--mut);margin:0 0 20px;font-size:14px}
+  h2{margin:0 0 12px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.12em;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;margin-top:16px;
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+  .banner{
+    background:rgba(255,255,255,.04); border:1px solid var(--line);
+    border-radius:16px; padding:14px 16px; font-size:13px; color:var(--mut); margin-top:16px;
+  }
+  .banner b{color:#fff;font-weight:600}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 6px;text-transform:uppercase;letter-spacing:.06em}
+  input[type=text]{
+    width:100%; background:var(--field); color:var(--ink);
+    border:1px solid var(--line); border-radius:12px; padding:11px 13px; font-size:14px;
+  }
+  input[type=text]:focus-visible, button:focus-visible, a:focus-visible{
+    outline:2px solid rgba(255,255,255,.28); outline-offset:2px;
+  }
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:200px}
+  button{
+    padding:10px 20px; font-size:14px; font-weight:600; border-radius:9999px;
+    border:1px solid transparent; cursor:pointer; background:#fff; color:#000; transition:background .2s;
+  }
+  button:hover:not(:disabled){background:#e8e8e8}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.ghost{background:transparent;border-color:var(--line);color:var(--ink)}
+  button.ghost:hover:not(:disabled){border-color:rgba(255,255,255,.4);background:rgba(255,255,255,.05)}
+  button.recording{background:var(--rec);color:#fff;animation:pulse 1.2s ease-in-out infinite}
+  button.small{padding:7px 14px;font-size:13px}
+  button.danger{background:transparent;border-color:var(--line);color:var(--danger)}
+  button.danger:hover:not(:disabled){border-color:var(--danger);background:rgba(229,72,77,.08)}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(229,72,77,.45)}50%{box-shadow:0 0 0 8px rgba(229,72,77,0)}}
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation:none!important;transition:none!important}
+  }
+  /* stepper */
+  .stepbar{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+  .dot{
+    width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;background:var(--field);border:1px solid var(--line);color:var(--mut);flex:none;
+  }
+  .dot.active{border-color:#fff;color:#fff}
+  .dot.done{background:#fff;border-color:#fff;color:#000}
+  .dotline{flex:1;height:1px;background:var(--line)}
+  .stepLabel{font-size:13px;color:var(--mut);margin-bottom:6px}
+  .sentence{
+    background:var(--field);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;font-size:17px;margin:6px 0 14px;
+  }
+  .meter{height:10px;background:rgba(255,255,255,.06);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:10px 0}
+  .meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,rgba(255,255,255,.6),#fff);transition:width .06s linear}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  audio{width:100%;margin-top:10px;height:36px}
+  .status{font-size:13px;color:var(--mut);margin-top:10px;min-height:18px}
+  .status.ok{color:var(--ok)} .status.err{color:var(--danger)}
+  .doneBox{border:1px solid rgba(63,185,80,.4);background:rgba(63,185,80,.06);border-radius:14px;padding:14px 16px;margin-top:12px;font-size:14px}
+  /* voices list */
+  .vlist{list-style:none;padding:0;margin:10px 0 0}
+  .vlist li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 2px;border-bottom:1px solid var(--line)}
+  .vlist li:last-child{border-bottom:none}
+  .vname{font-family:ui-monospace,Consolas,monospace;font-size:14px}
+  .backend{font-size:12px;color:var(--mut)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+
+<a class="home" href="/">&larr; Overview</a>
+<h1>Voice Enrollment</h1>
+<p class="sub">Record a clean reference sample of an employee's voice, one guided sentence at a time.</p>
+
+<div class="banner">
+  <b>How it works:</b> each recording is cleaned in your browser — high-pass filtered (~85&nbsp;Hz),
+  silence-trimmed and peak-normalized — before the clips are combined and stored. Nothing raw is uploaded.
+  Note: <b>speaking</b> in a cloned voice requires the F5-TTS backend running on a GPU; until then voices
+  are stored but not yet playable.
+</div>
+
+<!-- Config -->
+<div class="card">
+  <h2>Connection</h2>
+  <div class="row">
+    <div>
+      <label for="ttsUrl">TTS URL</label>
+      <input type="text" id="ttsUrl" value="http://localhost:8002" spellcheck="false">
+      <script>document.getElementById("ttsUrl").value = "http://" + location.hostname + ":8002";</script>
+    </div>
+    <div>
+      <label for="apiKey">API key</label>
+      <input type="text" id="apiKey" value="dev-test-key" spellcheck="false">
+    </div>
+  </div>
+</div>
+
+<!-- Voice name -->
+<div class="card">
+  <h2>New voice</h2>
+  <label for="voiceName">Voice name (lowercase letters, digits, underscore)</label>
+  <input type="text" id="voiceName" placeholder="e.g. sarah_reception" spellcheck="false" autocomplete="off">
+</div>
+
+<!-- Guided recorder -->
+<div class="card" id="recorderCard">
+  <h2>Guided recording</h2>
+  <div class="stepbar" id="stepbar" aria-hidden="true"></div>
+  <div class="stepLabel" id="stepLabel">Sentence 1 of 4</div>
+  <div class="sentence" id="sentenceText"></div>
+
+  <div class="meter" aria-hidden="true"><i id="meterBar"></i></div>
+
+  <div class="controls">
+    <button id="recBtn">&#9210; Record</button>
+    <button id="rerecBtn" class="ghost" disabled>Re-record</button>
+    <button id="nextBtn" class="ghost" disabled>Next &rarr;</button>
+  </div>
+  <audio id="clipPlayer" controls class="hidden"></audio>
+  <div class="status" id="recStatus" role="status" aria-live="polite"></div>
+
+  <div class="doneBox hidden" id="doneBox">
+    <div id="doneInfo"></div>
+    <audio id="combinedPlayer" controls></audio>
+    <div class="controls">
+      <button id="saveBtn">Save voice</button>
+      <button id="restartBtn" class="ghost">Start over</button>
+    </div>
+    <div class="status" id="saveStatus" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- Enrolled voices -->
+<div class="card">
+  <h2>Enrolled voices</h2>
+  <div class="controls" style="margin-top:0">
+    <button id="refreshBtn" class="ghost small">Refresh</button>
+    <span class="backend" id="backendLabel"></span>
+  </div>
+  <ul class="vlist" id="voiceList"></ul>
+  <div class="status" id="listStatus" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+var SENTENCES = [
+  "Hi, thank you for calling. I'm here to help you today.",
+  "We have several great properties available that match what you're looking for.",
+  "I can book a viewing, share pricing, or connect you with an agent right away.",
+  "Thanks for your time — have a wonderful day, and we'll talk again soon."
+];
+var TARGET_RATE = 16000;
+var SILENCE_THRESH = 0.01;      // RMS threshold for trim
+var GATE_THRESH   = 0.006;      // gentle noise-gate threshold
+var PAD_SAMPLES   = Math.round(0.100 * TARGET_RATE); // 100 ms padding kept at edges
+var GAP_SAMPLES   = Math.round(0.150 * TARGET_RATE); // 150 ms silence between clips
+var MIN_CLIP_SEC  = 0.4;
+
+// ---------- state ----------
+var step = 0;                 // 0..3
+var clips = [null,null,null,null];  // cleaned Float32Arrays @16k
+var recording = false;
+var rec = null;               // {ctx, stream, node, src, buffers}
+var combinedBlob = null;
+var combinedSecs = 0;
+
+// ---------- dom ----------
+function $(id){ return document.getElementById(id); }
+var recBtn=$("recBtn"), rerecBtn=$("rerecBtn"), nextBtn=$("nextBtn"),
+    recStatus=$("recStatus"), meterBar=$("meterBar"), clipPlayer=$("clipPlayer"),
+    doneBox=$("doneBox"), doneInfo=$("doneInfo"), combinedPlayer=$("combinedPlayer"),
+    saveBtn=$("saveBtn"), saveStatus=$("saveStatus"), restartBtn=$("restartBtn"),
+    stepbar=$("stepbar"), stepLabel=$("stepLabel"), sentenceText=$("sentenceText"),
+    voiceList=$("voiceList"), listStatus=$("listStatus"), backendLabel=$("backendLabel"),
+    refreshBtn=$("refreshBtn");
+
+function baseUrl(){ return $("ttsUrl").value.trim().replace(/\/+$/,""); }
+function headers(extra){
+  var h = { "Authorization": "Bearer " + $("apiKey").value.trim() };
+  if (extra) for (var k in extra) h[k] = extra[k];
+  return h;
+}
+function setStatus(el, msg, cls){
+  el.textContent = msg || "";
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+// ---------- stepper UI ----------
+function renderStepper(){
+  var html = "";
+  for (var i=0;i<4;i++){
+    var cls = "dot" + (clips[i] ? " done" : (i===step ? " active" : ""));
+    html += '<div class="'+cls+'">'+ (clips[i] ? "✓" : (i+1)) +'</div>';
+    if (i<3) html += '<div class="dotline"></div>';
+  }
+  stepbar.innerHTML = html;
+  stepLabel.textContent = "Sentence " + (step+1) + " of 4";
+  sentenceText.textContent = "“" + SENTENCES[step] + "”";
+  var have = !!clips[step];
+  rerecBtn.disabled = !have || recording;
+  nextBtn.disabled = !have || recording;
+  nextBtn.innerHTML = (step === 3) ? "Finish &amp; combine" : "Next &rarr;";
+  if (have){
+    clipPlayer.classList.remove("hidden");
+    clipPlayer.src = URL.createObjectURL(encodeWav(clips[step], TARGET_RATE));
+  } else {
+    clipPlayer.classList.add("hidden");
+    clipPlayer.removeAttribute("src");
+  }
+}
+
+// ---------- recording ----------
+function startRecording(){
+  setStatus(recStatus, "Requesting microphone…");
+  navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+  }).then(function(stream){
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    var ctx = new Ctx();
+    var src = ctx.createMediaStreamSource(stream);
+    var node = ctx.createScriptProcessor(4096, 1, 1);
+    var buffers = [];
+    node.onaudioprocess = function(e){
+      var ch = e.inputBuffer.getChannelData(0);
+      buffers.push(new Float32Array(ch));
+      // live level meter (RMS of this buffer)
+      var s = 0;
+      for (var i=0;i<ch.length;i++) s += ch[i]*ch[i];
+      var rms = Math.sqrt(s/ch.length);
+      meterBar.style.width = Math.min(100, Math.round(rms*300)) + "%";
+    };
+    src.connect(node);
+    node.connect(ctx.destination); // required by some browsers to fire onaudioprocess
+    rec = { ctx:ctx, stream:stream, node:node, src:src, buffers:buffers };
+    recording = true;
+    recBtn.innerHTML = "&#9209; Stop";
+    recBtn.classList.add("recording");
+    rerecBtn.disabled = true; nextBtn.disabled = true;
+    setStatus(recStatus, "Recording… read the sentence naturally, then press Stop.");
+  }).catch(function(err){
+    var msg = "Microphone access failed: " + (err && err.name === "NotAllowedError"
+      ? "permission denied. Allow mic access and try again."
+      : (err && err.message ? err.message : String(err)));
+    setStatus(recStatus, msg, "err");
+  });
+}
+
+function stopRecording(){
+  if (!rec) return;
+  var r = rec; rec = null; recording = false;
+  var srcRate = r.ctx.sampleRate;
+  try { r.src.disconnect(); r.node.disconnect(); } catch(e){}
+  r.node.onaudioprocess = null;
+  r.stream.getTracks().forEach(function(t){ t.stop(); });
+  r.ctx.close().catch(function(){});
+  meterBar.style.width = "0%";
+  recBtn.innerHTML = "&#9210; Record";
+  recBtn.classList.remove("recording");
+
+  // flatten
+  var total = 0;
+  for (var i=0;i<r.buffers.length;i++) total += r.buffers[i].length;
+  if (total === 0){
+    setStatus(recStatus, "Nothing was captured — please try again.", "err");
+    renderStepper();
+    return;
+  }
+  var raw = new Float32Array(total), off = 0;
+  for (var j=0;j<r.buffers.length;j++){ raw.set(r.buffers[j], off); off += r.buffers[j].length; }
+
+  var cleaned = cleanClip(raw, srcRate);
+  if (!cleaned || cleaned.length < MIN_CLIP_SEC * TARGET_RATE){
+    setStatus(recStatus, "Recording was empty or too quiet after cleanup — please speak closer to the mic and re-record.", "err");
+    renderStepper();
+    return;
+  }
+  clips[step] = cleaned;
+  setStatus(recStatus, "Captured " + (cleaned.length/TARGET_RATE).toFixed(1) +
+    "s (cleaned). Listen below, then Re-record or continue.", "ok");
+  renderStepper();
+}
+
+recBtn.addEventListener("click", function(){
+  if (recording) stopRecording(); else startRecording();
+});
+rerecBtn.addEventListener("click", function(){
+  clips[step] = null;
+  setStatus(recStatus, "");
+  renderStepper();
+});
+nextBtn.addEventListener("click", function(){
+  if (!clips[step]) return; // guard: cannot skip
+  if (step < 3){
+    step++;
+    setStatus(recStatus, "");
+    renderStepper();
+  } else {
+    combine();
+  }
+});
+restartBtn.addEventListener("click", function(){
+  step = 0; clips = [null,null,null,null]; combinedBlob = null; combinedSecs = 0;
+  doneBox.classList.add("hidden");
+  recBtn.disabled = false;
+  setStatus(recStatus, ""); setStatus(saveStatus, "");
+  renderStepper();
+});
+
+// ---------- audio cleanup pipeline (per clip) ----------
+function cleanClip(samples, srcRate){
+  var x = (srcRate === TARGET_RATE) ? samples : resampleLinear(samples, srcRate, TARGET_RATE);
+  x = highpass(x, TARGET_RATE, 85);
+  x = trimSilence(x);
+  if (!x || x.length === 0) return null;
+  x = noiseGate(x);
+  x = normalizePeak(x, 0.89);
+  return x;
+}
+
+// linear-interpolation resampler
+function resampleLinear(input, fromRate, toRate){
+  var ratio = fromRate / toRate;
+  var outLen = Math.max(1, Math.floor(input.length / ratio));
+  var out = new Float32Array(outLen);
+  for (var i=0;i<outLen;i++){
+    var pos = i * ratio;
+    var i0 = Math.floor(pos);
+    var i1 = Math.min(i0 + 1, input.length - 1);
+    var frac = pos - i0;
+    out[i] = input[i0] * (1 - frac) + input[i1] * frac;
+  }
+  return out;
+}
+
+// one-pole high-pass, cutoff Hz
+function highpass(x, rate, cutoff){
+  var rc = 1 / (2 * Math.PI * cutoff);
+  var dt = 1 / rate;
+  var alpha = rc / (rc + dt);
+  var out = new Float32Array(x.length);
+  if (x.length === 0) return out;
+  out[0] = x[0];
+  for (var i=1;i<x.length;i++){
+    out[i] = alpha * (out[i-1] + x[i] - x[i-1]);
+  }
+  return out;
+}
+
+// trim leading/trailing silence using 20 ms RMS windows, keep ~100 ms padding
+function trimSilence(x){
+  var win = Math.round(0.020 * TARGET_RATE); // 320 samples
+  var nWin = Math.floor(x.length / win);
+  if (nWin === 0) return null;
+  var first = -1, last = -1;
+  for (var w=0; w<nWin; w++){
+    var s = 0, base = w*win;
+    for (var i=0;i<win;i++){ var v = x[base+i]; s += v*v; }
+    var rms = Math.sqrt(s/win);
+    if (rms >= SILENCE_THRESH){
+      if (first < 0) first = w;
+      last = w;
+    }
+  }
+  if (first < 0) return null; // all silence
+  var start = Math.max(0, first*win - PAD_SAMPLES);
+  var end = Math.min(x.length, (last+1)*win + PAD_SAMPLES);
+  return x.slice(start, end);
+}
+
+// gentle noise gate: per-window gain (0 below threshold), gains interpolated
+// between window centers to avoid clicks
+function noiseGate(x){
+  var win = Math.round(0.020 * TARGET_RATE);
+  var nWin = Math.ceil(x.length / win);
+  if (nWin < 2) return x;
+  var gains = new Float32Array(nWin);
+  for (var w=0; w<nWin; w++){
+    var s=0, base=w*win, n=Math.min(win, x.length-base);
+    for (var i=0;i<n;i++){ var v=x[base+i]; s += v*v; }
+    var rms = Math.sqrt(s/n);
+    gains[w] = rms < GATE_THRESH ? 0 : 1;
+  }
+  var out = new Float32Array(x.length);
+  for (var j=0;j<x.length;j++){
+    var pos = (j - win/2) / win;      // fractional window index at sample j
+    var w0 = Math.floor(pos);
+    var frac = pos - w0;
+    var g0 = gains[Math.min(Math.max(w0,0), nWin-1)];
+    var g1 = gains[Math.min(Math.max(w0+1,0), nWin-1)];
+    out[j] = x[j] * (g0*(1-frac) + g1*frac);
+  }
+  return out;
+}
+
+function normalizePeak(x, target){
+  var peak = 0;
+  for (var i=0;i<x.length;i++){ var a = Math.abs(x[i]); if (a > peak) peak = a; }
+  if (peak < 1e-6) return x;
+  var scale = Math.min(target / peak, 20); // cap gain to avoid blowing up noise
+  var out = new Float32Array(x.length);
+  for (var j=0;j<x.length;j++) out[j] = x[j] * scale;
+  return out;
+}
+
+// ---------- combine + WAV encode ----------
+function combine(){
+  var total = 0;
+  for (var i=0;i<4;i++) total += clips[i].length;
+  total += GAP_SAMPLES * 3;
+  var out = new Float32Array(total), off = 0;
+  for (var j=0;j<4;j++){
+    out.set(clips[j], off);
+    off += clips[j].length;
+    if (j < 3) off += GAP_SAMPLES; // Float32Array is zero-initialized = silence
+  }
+  combinedSecs = total / TARGET_RATE;
+  combinedBlob = encodeWav(out, TARGET_RATE);
+  doneInfo.innerHTML = "All 4 sentences captured. Combined sample: <b>" +
+    combinedSecs.toFixed(1) + "s</b> @ 16 kHz mono, cleaned &amp; normalized.";
+  combinedPlayer.src = URL.createObjectURL(combinedBlob);
+  doneBox.classList.remove("hidden");
+  setStatus(saveStatus, "");
+  doneBox.scrollIntoView({ block:"nearest" });
+}
+
+// mono 16-bit PCM WAV
+function encodeWav(samples, rate){
+  var buf = new ArrayBuffer(44 + samples.length * 2);
+  var dv = new DataView(buf);
+  function str(o,s){ for (var i=0;i<s.length;i++) dv.setUint8(o+i, s.charCodeAt(i)); }
+  str(0,"RIFF");
+  dv.setUint32(4, 36 + samples.length * 2, true);
+  str(8,"WAVE");
+  str(12,"fmt ");
+  dv.setUint32(16, 16, true);          // fmt chunk size
+  dv.setUint16(20, 1, true);           // PCM
+  dv.setUint16(22, 1, true);           // mono
+  dv.setUint32(24, rate, true);        // sample rate
+  dv.setUint32(28, rate * 2, true);    // byte rate (rate * channels * 2)
+  dv.setUint16(32, 2, true);           // block align
+  dv.setUint16(34, 16, true);          // bits/sample
+  str(36,"data");
+  dv.setUint32(40, samples.length * 2, true);
+  var o = 44;
+  for (var i=0;i<samples.length;i++, o+=2){
+    var s = Math.max(-1, Math.min(1, samples[i]));
+    dv.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([buf], { type:"audio/wav" });
+}
+
+// ---------- save ----------
+saveBtn.addEventListener("click", function(){
+  var name = $("voiceName").value.trim();
+  if (!/^[a-z0-9_]+$/.test(name)){
+    setStatus(saveStatus, "Enter a valid voice name first (lowercase letters, digits, underscore).", "err");
+    $("voiceName").focus();
+    return;
+  }
+  if (!combinedBlob){
+    setStatus(saveStatus, "No combined recording to save.", "err");
+    return;
+  }
+  var fd = new FormData();
+  fd.append("name", name);
+  fd.append("file", combinedBlob, name + ".wav");
+  fd.append("transcript", SENTENCES.join(" "));
+  saveBtn.disabled = true;
+  setStatus(saveStatus, "Uploading…");
+  fetch(baseUrl() + "/v1/tts/voices", { method:"POST", headers: headers(), body: fd })
+    .then(function(res){
+      if (!res.ok) return res.text().then(function(t){
+        throw new Error("HTTP " + res.status + (t ? " — " + t.slice(0,200) : ""));
+      });
+      return res.json();
+    })
+    .then(function(data){
+      var msg = "Voice “" + (data.voice_id || name) + "” stored.";
+      if (data.clonable_now === false && data.note) msg += " " + data.note;
+      setStatus(saveStatus, msg, "ok");
+      loadVoices();
+    })
+    .catch(function(err){
+      setStatus(saveStatus, "Save failed: " + err.message +
+        " — check the TTS URL, API key, and that the service is running.", "err");
+    })
+    .then(function(){ saveBtn.disabled = false; });
+});
+
+// ---------- voices list ----------
+function loadVoices(){
+  setStatus(listStatus, "Loading…");
+  fetch(baseUrl() + "/v1/tts/voices", { headers: headers() })
+    .then(function(res){
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    })
+    .then(function(data){
+      var voices = data.voices || [];
+      backendLabel.textContent = data.backend ? "backend: " + data.backend : "";
+      voiceList.innerHTML = "";
+      if (voices.length === 0){
+        setStatus(listStatus, "No voices enrolled yet.");
+        return;
+      }
+      setStatus(listStatus, "");
+      voices.forEach(function(v){
+        var li = document.createElement("li");
+        var nm = document.createElement("span");
+        nm.className = "vname"; nm.textContent = v;
+        var btns = document.createElement("span");
+        btns.style.display = "flex"; btns.style.gap = "8px";
+        var test = document.createElement("button");
+        test.className = "ghost small"; test.innerHTML = "&#9654; Test";
+        test.setAttribute("aria-label","Test voice " + v);
+        test.addEventListener("click", function(){ testVoice(v, test); });
+        var del = document.createElement("button");
+        del.className = "danger small"; del.innerHTML = "&#128465; Delete";
+        del.setAttribute("aria-label","Delete voice " + v);
+        del.addEventListener("click", function(){
+          if (!confirm("Delete voice “" + v + "”? This cannot be undone.")) return;
+          deleteVoice(v);
+        });
+        btns.appendChild(test); btns.appendChild(del);
+        li.appendChild(nm); li.appendChild(btns);
+        voiceList.appendChild(li);
+      });
+    })
+    .catch(function(err){
+      voiceList.innerHTML = "";
+      backendLabel.textContent = "";
+      setStatus(listStatus, "Could not load voices: " + err.message +
+        " — is the TTS service running at " + baseUrl() + "?", "err");
+    });
+}
+
+function testVoice(name, btn){
+  btn.disabled = true;
+  setStatus(listStatus, "Synthesizing test audio with “" + name + "”…");
+  fetch(baseUrl() + "/v1/tts", {
+    method: "POST",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ text: "Hello! This is a quick test of the enrolled voice.", voice: name })
+  })
+    .then(function(res){
+      if (!res.ok) return res.text().then(function(t){
+        throw new Error("HTTP " + res.status + (t ? " — " + t.slice(0,200) : ""));
+      });
+      return res.blob();
+    })
+    .then(function(blob){
+      var a = new Audio(URL.createObjectURL(blob));
+      a.play();
+      setStatus(listStatus, "Playing test for “" + name + "”.", "ok");
+    })
+    .catch(function(err){
+      setStatus(listStatus, "Test failed: " + err.message +
+        " (cloned-voice playback requires the F5-TTS GPU backend).", "err");
+    })
+    .then(function(){ btn.disabled = false; });
+}
+
+function deleteVoice(name){
+  fetch(baseUrl() + "/v1/tts/voices/" + encodeURIComponent(name), {
+    method: "DELETE", headers: headers()
+  })
+    .then(function(res){
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      setStatus(listStatus, "Deleted “" + name + "”.", "ok");
+      loadVoices();
+    })
+    .catch(function(err){
+      setStatus(listStatus, "Delete failed: " + err.message, "err");
+    });
+}
+
+refreshBtn.addEventListener("click", loadVoices);
+
+// ---------- init ----------
+if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+  setStatus(recStatus, "This browser does not support microphone capture (getUserMedia). Use a recent Chrome, Edge, or Firefox.", "err");
+  recBtn.disabled = true;
+}
+renderStepper();
+loadVoices();
+
+})();
+</script>
+</body>
+</html>

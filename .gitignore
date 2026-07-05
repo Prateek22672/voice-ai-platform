@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+.next/
+.venv/
+venv/
+voices/*.wav
+voices/*.json
+_test.wav
+_tts_out.wav
+_silence.wav
+_speech.wav
+_demo_question.wav
+container_tts_test.wav
+kokoro_sample.wav
+reply_from_agent.wav

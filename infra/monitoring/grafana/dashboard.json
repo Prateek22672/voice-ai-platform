@@ -1,0 +1,14 @@
+{
+  "title": "Voice AI Platform",
+  "panels": [
+    {"title": "STT latency p50/p95 (ms)", "type": "timeseries",
+     "targets": [{"expr": "voiceai_stt_ms_p50"}, {"expr": "voiceai_stt_ms_p95"}]},
+    {"title": "TTS first-chunk latency (ms)", "type": "timeseries",
+     "targets": [{"expr": "voiceai_tts_first_chunk_ms_p50"}, {"expr": "voiceai_tts_first_chunk_ms_p95"}]},
+    {"title": "LLM first-token latency (ms)", "type": "timeseries",
+     "targets": [{"expr": "voiceai_llm_first_token_ms_p50"}]},
+    {"title": "Call minutes total", "type": "stat", "targets": [{"expr": "voiceai_call_minutes_total"}]},
+    {"title": "Interruptions (barge-in) total", "type": "stat", "targets": [{"expr": "voiceai_interruption_total"}]}
+  ],
+  "schemaVersion": 39
+}

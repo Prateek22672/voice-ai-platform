@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+minio>=7.2
+asyncpg>=0.29
+python-multipart
