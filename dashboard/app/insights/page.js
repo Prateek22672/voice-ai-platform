@@ -2,10 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-// host-aware: call whatever server the page is served from (works locally AND when deployed)
-const STT_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:8001`
-  : 'http://localhost:8001';
+import { apiBase } from '../lib/api';
+const STT_BASE = apiBase(8001); // stt-service (direct :8001, or same-origin behind the tunnel)
 const AUTH_HEADER = { Authorization: 'Bearer dev-test-key' };
 
 const RATES_USD_PER_MIN = {

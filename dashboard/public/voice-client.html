@@ -50,7 +50,10 @@
 
   <label>Gateway WS URL</label>
   <input id="wsurl" value="ws://localhost:8000/v1/agent/stream">
-  <script>document.getElementById("wsurl").value = "ws://" + location.hostname + ":8000/v1/agent/stream";</script>
+  <script>(function(){var l=location,p=l.port,pr=l.protocol==="https:"?"wss":"ws";
+    document.getElementById("wsurl").value = (p===""||p==="80"||p==="443")
+      ? pr+"://"+l.host+"/v1/agent/stream"          /* behind the tunnel: same origin */
+      : "ws://"+l.hostname+":8000/v1/agent/stream"; /* direct IP:port */})();</script>
   <label>Agent system prompt</label>
   <textarea id="prompt" rows="3">You are a friendly interview agent. Ask the candidate one short question at a time about their software experience. Keep every reply under two sentences.</textarea>
   <p><button id="btn">Start Session</button></p>

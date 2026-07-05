@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { apiBase } from '../lib/api';
 
 const FX = 85; // ≈ ₹85 / $1
 
@@ -92,8 +93,7 @@ export default function ArchitecturePage() {
 
     async function fetchUsage() {
       try {
-        const _stt = `http://${window.location.hostname}:8001`;
-        const res = await fetch(`${_stt}/v1/usage_stt`, {
+        const res = await fetch(`${apiBase(8001)}/v1/usage_stt`, {
           cache: 'no-store',
         });
         if (!res.ok) throw new Error('bad status');

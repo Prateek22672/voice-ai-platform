@@ -2,10 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-// host-aware: call whatever server the page is served from (works locally AND when deployed)
-const GW = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:8090`
-  : 'http://localhost:8090';
+import { apiBase } from '../lib/api';
+const GW = apiBase(8090); // api-gateway (direct :8090, or same-origin behind the tunnel)
 
 /* ---- small premium UI atoms (self-contained) ---- */
 function Card({ children, className = '' }) {

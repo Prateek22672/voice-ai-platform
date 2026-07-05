@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { ArrowRight, RefreshCw } from 'lucide-react';
 import Button from './components/ui/Button';
+import { apiBase } from './lib/api';
 
 const Beams = dynamic(
   () => import('./components/ui/ethereal-beams-hero').then((m) => m.Beams),
@@ -97,7 +98,7 @@ export default function Overview() {
     SERVICES.forEach((s) => {
       // Most services don't send CORS headers, so a no-cors reachability
       // probe is the reliable signal: resolve = running, reject = unreachable.
-      fetch(`http://${window.location.hostname}:${s.port}/health`, { mode: 'no-cors', cache: 'no-store' })
+      fetch(`${apiBase(s.port)}/health`, { mode: 'no-cors', cache: 'no-store' })
         .then(() => setStatus((prev) => ({ ...prev, [s.port]: 'up' })))
         .catch(() => setStatus((prev) => ({ ...prev, [s.port]: 'down' })));
     });

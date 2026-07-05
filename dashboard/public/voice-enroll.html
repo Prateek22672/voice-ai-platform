@@ -106,7 +106,9 @@
     <div>
       <label for="ttsUrl">TTS URL</label>
       <input type="text" id="ttsUrl" value="http://localhost:8002" spellcheck="false">
-      <script>document.getElementById("ttsUrl").value = "http://" + location.hostname + ":8002";</script>
+      <script>(function(){var l=location,p=l.port;
+        document.getElementById("ttsUrl").value = (p===""||p==="80"||p==="443")
+          ? l.origin : "http://"+l.hostname+":8002";})();</script>
     </div>
     <div>
       <label for="apiKey">API key</label>
