@@ -70,6 +70,7 @@
 "use strict";
 var ws, ctx, srcNode, proc, stream;
 var IN_RATE = 16000, TTS_RATE = 24000, nextPlayTime = 0, agentPlaying = false, playEndTimer = null;
+var pendingPause = 0;      // silence (s) to insert before the next sentence for natural pacing
 var agentActive = false;   // server says it's the agent's turn (mic muted)
 function micMuted(){ return agentActive || agentPlaying; }
 
@@ -123,7 +124,10 @@ function enqueuePcm(arrbuf){
   var s = ctx.createBufferSource();
   s.buffer = buf; s.connect(ctx.destination);
   var now = ctx.currentTime;
-  if (nextPlayTime < now + 0.06) nextPlayTime = now + 0.06;
+  // 0.12s cushion smooths out network jitter between streamed chunks (was 0.06 = too tight).
+  if (nextPlayTime < now + 0.12) nextPlayTime = now + 0.12;
+  // insert a natural pause before a new sentence so speech doesn't run together / feel rushed.
+  if (pendingPause){ nextPlayTime += pendingPause; pendingPause = 0; }
   s.start(nextPlayTime);
   nextPlayTime += buf.duration;
   agentPlaying = true;
@@ -177,7 +181,7 @@ async function start(){
       else if (d.type === "partial_transcript"){ showPartial(d.text); }
       else if (d.type === "transcript"){ commitPartial(d.text); setState("thinking","✍️ Heard you — the agent is thinking…"); }
       else if (d.type === "agent_text") log("agent","Agent: "+d.text);
-      else if (d.type === "audio_done"){ TTS_RATE = d.sample_rate || 24000; }
+      else if (d.type === "audio_done"){ TTS_RATE = d.sample_rate || 24000; pendingPause = 0.22; }
       else if (d.type === "turn_done"){ if(!agentPlaying) setState("listening","🎙️ Listening — speak now"); }
       else if (d.type === "error") log("sys","ERROR: "+d.error);
     } else {

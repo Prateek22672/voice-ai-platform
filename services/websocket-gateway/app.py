@@ -29,14 +29,16 @@ async def agent_stream(ws: WebSocket):
     agent_turn = asyncio.Event()   # true for the WHOLE agent response — mic is paused (half-duplex)
 
     async with httpx.AsyncClient(timeout=60) as http:
-        async def handle_transcript(text: str):
+        async def handle_transcript(text: str, echo: bool = True):
             """final transcript -> conversation SSE -> per-sentence TTS -> audio to client.
-            The mic is muted for the whole turn so the agent never transcribes its own voice."""
+            The mic is muted for the whole turn so the agent never transcribes its own voice.
+            echo=False is used for the agent's opening greeting so no fake 'user' line is shown."""
             nonlocal session_id
             agent_turn.set()
             await ws.send_text(json.dumps({"type": "state", "state": "agent"}))  # UI: agent turn
             try:
-                await ws.send_text(json.dumps({"type": "transcript", "text": text}))
+                if echo:
+                    await ws.send_text(json.dumps({"type": "transcript", "text": text}))
                 async with http.stream("POST", f"{CONV_URL}/v1/sessions/{session_id}/turn",
                                        headers=HDRS, json={"text": text}) as resp:
                     async for line in resp.aiter_lines():
@@ -107,6 +109,12 @@ async def agent_stream(ws: WebSocket):
                                             json={"system_prompt": ev.get("system_prompt", "")})
                         session_id = r.json()["session_id"]
                         await ws.send_text(json.dumps({"type": "ready", "session_id": session_id}))
+                        # Optional: agent OPENS the conversation (greet + first question) instead of
+                        # waiting for the candidate to speak first. Interview platforms want this.
+                        if ev.get("greet"):
+                            kickoff = ev.get("greeting_prompt") or \
+                                "Greet the candidate warmly in one sentence, then ask your first question."
+                            asyncio.create_task(handle_transcript(kickoff, echo=False))
                     elif ev.get("event") == "close":
                         break
                 elif msg.get("bytes"):

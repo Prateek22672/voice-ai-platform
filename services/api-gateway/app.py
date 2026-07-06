@@ -140,6 +140,44 @@ async def revoke_key(key_id: int, request: Request):
     await pool.execute("UPDATE api_keys SET revoked=true WHERE id=$1", key_id)
     return {"revoked": key_id}
 
+@app.get("/v1/status")
+async def status(request: Request):
+    """Public health probe for external integrations (the green/red 'connected' dot).
+    Open (no key needed) so a frontend can poll it. If a Bearer key IS sent, we also
+    report whether that key is valid — without spending the rate-limit budget."""
+    checks = {
+        "voice_ws": os.getenv("GW_URL",  "http://websocket-gateway:8000") + "/health",
+        "stt":      os.getenv("STT_URL", "http://stt-service:8001") + "/health",
+        "tts":      os.getenv("TTS_URL", "http://tts-service:8002") + "/health",
+        "llm":      os.getenv("CONV_URL","http://conversation-service:8003") + "/health",
+    }
+    components = {}
+    async with httpx.AsyncClient(timeout=3) as c:
+        for name, url in checks.items():
+            try:
+                r = await c.get(url)
+                components[name] = "up" if r.status_code < 500 else "down"
+            except Exception:
+                components[name] = "down"
+    # Optional API-key validity (does not consume the rate limiter).
+    key_valid = None
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        raw = auth.removeprefix("Bearer ").strip()
+        if raw and raw == os.getenv("DEV_API_KEY", ""):
+            key_valid = True
+        elif raw:
+            try:
+                pool = await db()
+                row = await pool.fetchrow(
+                    "SELECT tenant_id FROM api_keys WHERE key_hash=$1 AND revoked=false",
+                    hashlib.sha256(raw.encode()).hexdigest())
+                key_valid = bool(row)
+            except Exception:
+                key_valid = None
+    return {"ok": all(v == "up" for v in components.values()), "service": "voice-ai",
+            "components": components, "api_key_valid": key_valid, "time": int(time.time())}
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy(path: str, request: Request):
     tenant = await authenticate(request)

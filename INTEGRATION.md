@@ -1,110 +1,282 @@
-# Integrating the Voice AI service into your AI Interview Platform
+# Voice AI — Integration Guide (for the Interview Platform)
 
-Replace your interview platform's slow/inaccurate STT + TTS by calling this self-hosted service over
-its API. Groq `whisper-large-v3` + our audio/text cleanup for transcription; Kokoro for the voice.
+Everything you need to connect your **AI Interview Platform** to this Voice AI service:
+the base URL, how to get your API key, every endpoint, a **live green/red status dot**, and a
+**drop-in live voice-agent client**. Paste this whole file to Claude on the other platform and it
+can wire it up.
 
 ---
 
-## 1. What you need
+## 0. The essentials
 
-| Thing | Value (local dev) |
+| Thing | Value |
 |---|---|
-| REST base URL | `http://localhost:8080`  *(the API gateway)* |
-| Realtime voice WS | `ws://localhost:8000/v1/agent/stream` |
-| Auth header | `Authorization: Bearer <YOUR_API_KEY>` |
-| Get a key | Dashboard → **Admin** (password `admin123`) → *Create a key* |
+| **Base URL** | `https://voice.foliofyx.in` |
+| **Live voice WebSocket** | `wss://voice.foliofyx.in/v1/agent/stream` |
+| **Status endpoint** (green/red) | `GET https://voice.foliofyx.in/v1/status` |
+| **Auth for REST API** | HTTP header `Authorization: Bearer vk_xxx` |
+| **Auth for the live voice WS** | none required (open over the secure tunnel) |
 
-> Put the key in your interview platform as an env var, e.g. `VOICE_API_KEY=vk_...`. Never hard-code it.
-
-When deployed, swap `localhost` for your voice server's host/domain (see §5).
+> **HTTPS/WSS only** — the microphone (`getUserMedia`) will not work over plain http.
 
 ---
 
-## 2. Speech → Text (transcribe the candidate)
+## 1. Get your API key (one-time, 30 seconds)
 
-`POST /v1/stt` — multipart form, field `file` = audio (wav/mp3/webm). Returns JSON `{ text, ... }`.
+The key is only needed for the **REST API** (custom TTS, sessions, usage). The **live voice WS
+does not need a key.**
 
-```ts
-// interview platform (Node / Next.js API route)
-export async function transcribe(audio: Blob): Promise<string> {
-  const form = new FormData();
-  form.append("file", audio, "answer.wav");
-  const r = await fetch("http://localhost:8080/v1/stt", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.VOICE_API_KEY}` },
-    body: form,
-  });
-  if (!r.ok) throw new Error(`STT ${r.status}`);
-  const { text } = await r.json();
-  return text;                    // accurate transcript, cleaned by our pipeline
+1. Open **https://voice.foliofyx.in/admin**
+2. Enter the **admin password** (ask the owner — set in the server `.env` as `ADMIN_PASSWORD`).
+3. Click **Create key**, name it `interview-platform`.
+4. **Copy the `vk_…` value immediately** — it's shown once and stored hashed.
+5. In your interview platform, save it as an env var, e.g. `VOICE_API_KEY=vk_…`.
+
+You can revoke/rotate it anytime from the same Admin page.
+
+---
+
+## 2. All endpoints
+
+### Public (no key)
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/status` | Health of the whole service (for the green/red dot). Optionally send your key to also check it's valid. |
+| `GET` | `/v1/tts/catalog` | List all natural voices + the current live agent voice. |
+| `WSS` | `/v1/agent/stream` | **The live voice interview** — full STT → LLM → TTS loop. |
+
+### REST API (require `Authorization: Bearer vk_…`)
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/tts` | `{ "text": "...", "voice": "af_heart" }` → `audio/wav`. Synthesize any text. |
+| `POST` | `/v1/sessions` | `{ "system_prompt": "..." }` → `{ "session_id": "..." }`. Start a text conversation. |
+| `POST` | `/v1/sessions/{id}/turn` | `{ "text": "..." }` → SSE stream of the agent's reply sentences. |
+| `GET`  | `/v1/usage` | Usage / cost metrics. |
+| `POST` | `/v1/calls` | `{ "to": "+91...", "agent_prompt": "..." }` → place a **phone call** (needs telephony enabled). |
+
+### Admin (password header `X-Admin-Password`, not the key) — you'll use the website for these
+`/admin/keys` (create/list), `/admin/keys/{id}/revoke`, `/admin/activity` (live connections).
+
+---
+
+## 3. Live green/red "connected" dot
+
+`GET /v1/status` returns:
+```json
+{
+  "ok": true,
+  "service": "voice-ai",
+  "components": { "voice_ws": "up", "stt": "up", "tts": "up", "llm": "up" },
+  "api_key_valid": true,
+  "time": 1751800000
+}
+```
+- `ok: true` → everything healthy → **green**.
+- Send your key (`Authorization: Bearer vk_…`) to also get `api_key_valid` — show red if the key is wrong/revoked.
+
+### Drop-in React component
+```jsx
+'use client';
+import { useEffect, useState } from 'react';
+
+const VOICE_BASE = 'https://voice.foliofyx.in';
+const VOICE_API_KEY = process.env.NEXT_PUBLIC_VOICE_API_KEY || ''; // optional
+
+export function VoiceStatusDot({ pollMs = 10000 }) {
+  const [state, setState] = useState('checking'); // 'up' | 'down' | 'checking'
+
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const r = await fetch(`${VOICE_BASE}/v1/status`, {
+          headers: VOICE_API_KEY ? { Authorization: `Bearer ${VOICE_API_KEY}` } : {},
+          cache: 'no-store',
+        });
+        const d = await r.json();
+        const ok = d.ok && (d.api_key_valid !== false);
+        if (alive) setState(ok ? 'up' : 'down');
+      } catch {
+        if (alive) setState('down');
+      }
+    };
+    check();
+    const id = setInterval(check, pollMs);
+    return () => { alive = false; clearInterval(id); };
+  }, [pollMs]);
+
+  const color = state === 'up' ? '#22c55e' : state === 'down' ? '#ef4444' : '#9ca3af';
+  const label = state === 'up' ? 'Voice service connected'
+              : state === 'down' ? 'Voice service offline' : 'Checking…';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+      <span style={{ width: 10, height: 10, borderRadius: '50%', background: color,
+                     boxShadow: state === 'up' ? '0 0 8px #22c55e' : 'none' }} />
+      {label}
+    </span>
+  );
 }
 ```
 
-## 3. Text → Speech (the AI interviewer's voice)
-
-`POST /v1/tts` — JSON `{ text, voice? }`. Returns `audio/wav` bytes.
-
-```ts
-export async function speak(text: string): Promise<ArrayBuffer> {
-  const r = await fetch("http://localhost:8080/v1/tts", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.VOICE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ text }),      // e.g. "Tell me about a hard bug you fixed."
-  });
-  if (!r.ok) throw new Error(`TTS ${r.status}`);
-  return r.arrayBuffer();                // play this wav in the browser
+### Vanilla JS version
+```js
+async function checkVoiceStatus() {
+  try {
+    const r = await fetch('https://voice.foliofyx.in/v1/status', { cache: 'no-store' });
+    const d = await r.json();
+    return d.ok ? 'up' : 'down';
+  } catch { return 'down'; }
 }
+// setInterval(async () => { dot.className = await checkVoiceStatus(); }, 10000);
 ```
 
-## 4. (Optional) Full realtime spoken interview — one WebSocket
+---
 
-For a live two-way voice interview (candidate speaks, AI replies aloud), open the gateway WS and stream
-mic audio. This runs the whole loop (STT → LLM → TTS) with turn-taking + barge-in built in.
+## 4. Embed the live voice interview (the main feature)
 
-```ts
-const ws = new WebSocket("ws://localhost:8000/v1/agent/stream");
-ws.binaryType = "arraybuffer";
-ws.onopen = () => ws.send(JSON.stringify({
-  event: "start",
-  system_prompt: "You are a senior engineering interviewer. Ask one question at a time.",
-}));
-// then stream PCM16 16kHz mic frames: ws.send(int16Buffer)
-ws.onmessage = (e) => {
-  if (typeof e.data === "string") {
-    const msg = JSON.parse(e.data);      // {type:'transcript'|'agent_text'|'state'|...}
-  } else {
-    playPcm(e.data);                     // agent voice audio (PCM16 @ 24kHz)
+Connect a WebSocket, send `start` with your interviewer prompt, stream mic audio in, play the
+agent's audio back. This runs the whole STT → LLM → TTS loop for you.
+
+**Protocol**
+- Send once: `{"event":"start","system_prompt":"<your interviewer instructions>","greet":true}`
+  - `greet:true` → **the agent opens the conversation** (greets + asks the first question) without
+    waiting for the candidate to speak. Optionally pass `"greeting_prompt":"<how to open>"` to
+    control the opening line. Omit `greet` (or set false) to have the agent wait for the user first.
+- Then send: binary **PCM16 mono 16 kHz** mic frames.
+- You receive:
+  - binary **PCM16 mono 24 kHz** = agent speech (play it),
+  - JSON events: `ready`, `state` (`agent`/`listening`), `partial_transcript`, `transcript`,
+    `agent_text`, `audio_done` (`{sample_rate}`), `turn_done`.
+- Half-duplex: **mute the mic while the agent is speaking** (state `agent`) so it doesn't hear itself.
+
+### Drop-in client class
+```js
+class VoiceAgent {
+  constructor(systemPrompt, { onLog, greet = true } = {}) {
+    this.url = 'wss://voice.foliofyx.in/v1/agent/stream';
+    this.systemPrompt = systemPrompt;
+    this.greet = greet;              // agent opens the conversation on its own
+    this.onLog = onLog || (() => {});
+    this.ttsRate = 24000; this.nextPlay = 0; this.pendingPause = 0;
+    this.agentActive = false; this.agentPlaying = false;
   }
-};
+  micMuted() { return this.agentActive || this.agentPlaying; }
+
+  async start() {
+    this.ctx = new AudioContext();
+    this.inRate = this.ctx.sampleRate;
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    this.ws = new WebSocket(this.url);
+    this.ws.binaryType = 'arraybuffer';
+
+    this.ws.onopen = () => {
+      this.ws.send(JSON.stringify({ event: 'start', system_prompt: this.systemPrompt, greet: this.greet }));
+      const src = this.ctx.createMediaStreamSource(this.stream);
+      const proc = this.ctx.createScriptProcessor(4096, 1, 1);
+      proc.onaudioprocess = (e) => {
+        if (this.micMuted()) return;
+        const f32 = e.inputBuffer.getChannelData(0);
+        const ds = this.#downsample(f32, this.inRate);
+        const i16 = new Int16Array(ds.length);
+        for (let i = 0; i < ds.length; i++) i16[i] = Math.max(-1, Math.min(1, ds[i])) * 32767;
+        if (this.ws.readyState === 1) this.ws.send(i16.buffer);
+      };
+      src.connect(proc); proc.connect(this.ctx.destination);
+      this._src = src; this._proc = proc;
+    };
+
+    this.ws.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        const d = JSON.parse(ev.data);
+        if (d.type === 'state') this.agentActive = (d.state === 'agent');
+        else if (d.type === 'transcript') this.onLog('you', d.text);
+        else if (d.type === 'agent_text') this.onLog('agent', d.text);
+        else if (d.type === 'audio_done') { this.ttsRate = d.sample_rate || 24000; this.pendingPause = 0.22; }
+      } else {
+        this.#play(ev.data);
+      }
+    };
+  }
+
+  stop() {
+    try { this.ws && this.ws.send(JSON.stringify({ event: 'close' })); } catch {}
+    this.ws && this.ws.close();
+    this._proc && this._proc.disconnect(); this._src && this._src.disconnect();
+    this.stream && this.stream.getTracks().forEach((t) => t.stop());
+    this.ctx && this.ctx.close();
+  }
+
+  #downsample(f32, inRate) {
+    if (inRate === 16000) return f32;
+    const ratio = inRate / 16000, outLen = Math.floor(f32.length / ratio), out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const s = Math.floor(i * ratio), e = Math.floor((i + 1) * ratio); let sum = 0, n = 0;
+      for (let j = s; j < e && j < f32.length; j++) { sum += f32[j]; n++; }
+      out[i] = n ? sum / n : 0;
+    }
+    return out;
+  }
+
+  #play(arrbuf) {
+    const i16 = new Int16Array(arrbuf), f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+    const buf = this.ctx.createBuffer(1, f32.length, this.ttsRate);
+    buf.copyToChannel(f32, 0);
+    const s = this.ctx.createBufferSource(); s.buffer = buf; s.connect(this.ctx.destination);
+    const now = this.ctx.currentTime;
+    if (this.nextPlay < now + 0.12) this.nextPlay = now + 0.12;
+    if (this.pendingPause) { this.nextPlay += this.pendingPause; this.pendingPause = 0; }
+    s.start(this.nextPlay); this.nextPlay += buf.duration;
+    this.agentPlaying = true;
+    clearTimeout(this._endT);
+    this._endT = setTimeout(() => { this.agentPlaying = false; }, (this.nextPlay - now) * 1000 + 250);
+  }
+}
+
+// Usage:
+// const agent = new VoiceAgent('You are an interviewer. Ask one question at a time…',
+//   { onLog: (who, text) => console.log(who, text) });
+// startBtn.onclick = () => agent.start();
+// stopBtn.onclick  = () => agent.stop();
 ```
-*(The ready-made browser client at `dashboard/public/voice-client.html` is a working reference for this.)*
+
+> A full working reference is live at **https://voice.foliofyx.in/voice-client.html** — view source to see the exact same logic in a complete page.
 
 ---
 
-## 5. Does the voice service need to be deployed? — Yes, for anything beyond same-machine
+## 5. REST examples
 
-- **Same machine (local dev):** if your interview platform runs on the same PC, `http://localhost:8080`
-  works right now — nothing to deploy.
-- **Interview platform deployed (Render/Vercel/etc.):** a deployed app **cannot** reach your laptop's
-  `localhost`. You must deploy this voice service to a server with a **public URL**, then point the
-  interview platform at that URL.
+**Synthesize speech (any voice):**
+```bash
+curl -X POST https://voice.foliofyx.in/v1/tts \
+  -H "Authorization: Bearer vk_YOURKEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Welcome to your interview.","voice":"af_heart"}' \
+  --output hello.wav
+```
 
-**Deploy options (cheapest first):**
-1. **A VPS** (DigitalOcean / Hetzner / AWS) running `docker compose up -d` → gives a public IP/domain.
-   CPU-only works for **Groq STT** (cloud) but TTS (Kokoro) will be slow.
-2. **A GPU server** (cloud L4 or your own) → real-time TTS + self-hosted STT, fully in-house.
-3. Put **TLS (https/wss)** in front (nginx/Caddy) and move the admin gate to real auth before production.
+**List voices (no key):**
+```bash
+curl https://voice.foliofyx.in/v1/tts/catalog
+```
 
-Because everything is Dockerized, deploying is the *same* `docker compose up` on the server — just set
-the `.env` (keys, `ADMIN_PASSWORD`) and open ports 8080 (REST) + 8000 (WS).
+**Check status with key validity:**
+```bash
+curl https://voice.foliofyx.in/v1/status -H "Authorization: Bearer vk_YOURKEY"
+```
 
 ---
 
-## 6. Watching the connection
+## 6. Notes & gotchas
 
-Every REST call with your key shows up live in **Dashboard → Admin → Connected clients** — you'll see
-`ai-interview-platform` turn green with its request count and which endpoints it's hitting. That's your
-"connected / not connected" indicator.
+- **CORS** is open (`*`), so you can call `/v1/status`, `/v1/tts`, `/v1/tts/catalog` directly from
+  your interview platform's frontend.
+- **Never expose `vk_` keys in public frontend code** if you can avoid it — for the status dot it's
+  optional; for `/v1/tts` prefer calling from your backend. The live voice WS needs no key.
+- **Live connections** you make show up on **https://voice.foliofyx.in/admin** → "Connected clients",
+  so you can visually confirm the integration is talking.
+- **Voices:** change the agent's live voice anytime at **https://voice.foliofyx.in/voices** — no code
+  change needed; new sessions use the new voice.
+- **Available voices** for the `voice` field: `af_heart` (default), `af_bella`, `af_sarah`,
+  `bf_emma`, `am_michael`, `bm_george`, … (full list from `/v1/tts/catalog`).
