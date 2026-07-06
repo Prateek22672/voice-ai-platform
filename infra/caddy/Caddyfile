@@ -13,7 +13,13 @@
 	handle /v1/tts* {
 		reverse_proxy tts-service:8002
 	}
-	handle /admin* {
+	handle /admin/verify* {
+		reverse_proxy api-gateway:8080
+	}
+	handle /admin/keys* {
+		reverse_proxy api-gateway:8080
+	}
+	handle /admin/activity* {
 		reverse_proxy api-gateway:8080
 	}
 	handle /v1/* {

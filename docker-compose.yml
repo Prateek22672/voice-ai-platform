@@ -78,6 +78,7 @@ services:
       KOKORO_SPEED: ${KOKORO_SPEED:-0.9}      # <1.0 = slower/calmer voice
       KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}   # guards "set live agent voice" in Voice Studio
     ports: ["8002:8002"]
     volumes: [ "hfcache:/root/.cache", "./voices:/app/voices" ]
     # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }] } } }

@@ -7,6 +7,7 @@ import { AudioLines, ArrowRight } from 'lucide-react';
 const LINKS = [
   { href: '/', label: 'Overview' },
   { href: '/architecture', label: 'Architecture' },
+  { href: '/voices', label: 'Voices' },
   { href: '/insights', label: 'Insights' },
   { href: '/admin', label: 'Admin' },
 ];

@@ -7,13 +7,66 @@ Pipeline: normalize -> sentence split -> adapter.synth_stream -> ~200ms chunks. 
 while later sentences still synthesize — this is what makes it feel real-time."""
 import asyncio, io, json, os, struct, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from fastapi import FastAPI, WebSocket, UploadFile, File, Form, Depends, HTTPException
+from fastapi import FastAPI, WebSocket, UploadFile, File, Form, Depends, HTTPException, Header
 from fastapi.responses import StreamingResponse, Response
 from shared.auth import verify_api_key
 from normalizer import normalize, split_sentences
 from adapters.base import load_adapter
 
 app = FastAPI(title="tts-service", version="1.0.0")
+
+# ---- Built-in Kokoro voice catalog: the single source of truth for the Voice Studio. ----
+# id = Kokoro voice id (1st letter a=American/b=British, 2nd f=female/m=male). grade = Kokoro's
+# own quality grade. featured = the ones we recommend first.
+VOICE_CATALOG = [
+    {"id": "af_heart",    "name": "Heart",    "accent": "American", "gender": "Female", "grade": "A",  "tag": "Flagship — warmest, most natural", "featured": True},
+    {"id": "af_bella",    "name": "Bella",    "accent": "American", "gender": "Female", "grade": "A-", "tag": "Expressive and lively",             "featured": True},
+    {"id": "af_nicole",   "name": "Nicole",   "accent": "American", "gender": "Female", "grade": "B-", "tag": "Soft, intimate"},
+    {"id": "af_aoede",    "name": "Aoede",    "accent": "American", "gender": "Female", "grade": "C+", "tag": "Clear and neutral"},
+    {"id": "af_kore",     "name": "Kore",     "accent": "American", "gender": "Female", "grade": "C+", "tag": "Bright, professional"},
+    {"id": "af_sarah",    "name": "Sarah",    "accent": "American", "gender": "Female", "grade": "C+", "tag": "Calm and friendly"},
+    {"id": "af_nova",     "name": "Nova",     "accent": "American", "gender": "Female", "grade": "C",  "tag": "Youthful"},
+    {"id": "af_sky",      "name": "Sky",      "accent": "American", "gender": "Female", "grade": "C-", "tag": "Light and airy"},
+    {"id": "am_michael",  "name": "Michael",  "accent": "American", "gender": "Male",   "grade": "C+", "tag": "Warm and steady",                  "featured": True},
+    {"id": "am_fenrir",   "name": "Fenrir",   "accent": "American", "gender": "Male",   "grade": "C+", "tag": "Deep and confident"},
+    {"id": "am_puck",     "name": "Puck",     "accent": "American", "gender": "Male",   "grade": "C+", "tag": "Playful, energetic"},
+    {"id": "am_echo",     "name": "Echo",     "accent": "American", "gender": "Male",   "grade": "C",  "tag": "Neutral and even"},
+    {"id": "am_eric",     "name": "Eric",     "accent": "American", "gender": "Male",   "grade": "C",  "tag": "Clear, business"},
+    {"id": "am_onyx",     "name": "Onyx",     "accent": "American", "gender": "Male",   "grade": "C",  "tag": "Low, authoritative"},
+    {"id": "bf_emma",     "name": "Emma",     "accent": "British",  "gender": "Female", "grade": "B-", "tag": "Refined and warm",                 "featured": True},
+    {"id": "bf_isabella", "name": "Isabella", "accent": "British",  "gender": "Female", "grade": "C",  "tag": "Elegant"},
+    {"id": "bf_alice",    "name": "Alice",    "accent": "British",  "gender": "Female", "grade": "C",  "tag": "Crisp"},
+    {"id": "bf_lily",     "name": "Lily",     "accent": "British",  "gender": "Female", "grade": "C",  "tag": "Gentle"},
+    {"id": "bm_george",   "name": "George",   "accent": "British",  "gender": "Male",   "grade": "C",  "tag": "Classic RP, mature",               "featured": True},
+    {"id": "bm_fable",    "name": "Fable",    "accent": "British",  "gender": "Male",   "grade": "C",  "tag": "Storyteller"},
+    {"id": "bm_lewis",    "name": "Lewis",    "accent": "British",  "gender": "Male",   "grade": "C+", "tag": "Deep, resonant"},
+    {"id": "bm_daniel",   "name": "Daniel",   "accent": "British",  "gender": "Male",   "grade": "C",  "tag": "Polished"},
+]
+VALID_VOICE_IDS = {v["id"] for v in VOICE_CATALOG}
+
+# Runtime-selectable default voice (what the live agent speaks with). Persisted to a small
+# file so the choice survives restarts; falls back to KOKORO_VOICE env, then af_heart.
+_VOICE_STATE_FILE = os.path.join(os.getenv("VOICE_DIR", "./voices"), "_default_voice.txt")
+
+def _load_default_voice():
+    try:
+        with open(_VOICE_STATE_FILE, encoding="utf-8") as f:
+            v = f.read().strip()
+            if v in VALID_VOICE_IDS:
+                return v
+    except Exception:
+        pass
+    return os.getenv("KOKORO_VOICE", "af_heart")
+
+def _save_default_voice(v):
+    try:
+        os.makedirs(os.path.dirname(_VOICE_STATE_FILE), exist_ok=True)
+        with open(_VOICE_STATE_FILE, "w", encoding="utf-8") as f:
+            f.write(v)
+    except Exception:
+        pass
+
+_DEFAULT_VOICE = _load_default_voice()
 
 # Dev CORS: lets the browser dashboard on :3000 call this service (enroll/list/delete voices).
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,7 +100,7 @@ def health():
 async def synth(body: dict, tenant=Depends(verify_api_key)):
     ad = get_adapter()
     text = normalize(body["text"])
-    voice = body.get("voice")
+    voice = body.get("voice") or _DEFAULT_VOICE
     t0 = time.time()
     chunks = []
     first_chunk_ms = None
@@ -75,7 +128,7 @@ async def synth_stream_ws(ws: WebSocket):
             t0 = time.time()
             first = None
             for sentence in split_sentences(text):
-                async for chunk in ad.synth_stream(sentence, req.get("voice")):
+                async for chunk in ad.synth_stream(sentence, req.get("voice") or _DEFAULT_VOICE):
                     if first is None:
                         first = int((time.time()-t0)*1000)
                     await ws.send_bytes(chunk)
@@ -124,6 +177,46 @@ async def delete_voice(name: str, tenant=Depends(verify_api_key)):
     if not removed:
         raise HTTPException(404, "voice not found")
     return {"deleted": safe}
+
+@app.get("/v1/tts/catalog")
+def voice_catalog():
+    """All built-in natural voices + the one the live agent currently uses. Open (no key)
+    so the Voice Studio can render the gallery."""
+    return {"voices": VOICE_CATALOG, "default": _DEFAULT_VOICE,
+            "backend": os.getenv("TTS_BACKEND", "kokoro")}
+
+@app.get("/v1/tts/default_voice")
+def get_default_voice():
+    return {"voice": _DEFAULT_VOICE}
+
+@app.post("/v1/tts/default_voice")
+async def set_default_voice(body: dict, x_admin_password: str = Header(default="")):
+    """Set the live agent voice. Guarded by the admin password when ADMIN_PASSWORD is set."""
+    admin = os.getenv("ADMIN_PASSWORD", "")
+    if admin and x_admin_password != admin:
+        raise HTTPException(401, "bad admin password")
+    v = (body.get("voice") or "").strip()
+    if v not in VALID_VOICE_IDS:
+        raise HTTPException(400, "unknown voice")
+    global _DEFAULT_VOICE
+    _DEFAULT_VOICE = v
+    _save_default_voice(v)
+    return {"voice": _DEFAULT_VOICE, "ok": True}
+
+@app.post("/v1/tts/preview")
+async def preview(body: dict):
+    """Short, unauthenticated preview for the Voice Studio — built-in voices only, text capped."""
+    v = body.get("voice") or _DEFAULT_VOICE
+    if v not in VALID_VOICE_IDS:
+        raise HTTPException(400, "unknown voice")
+    text = normalize((body.get("text") or "")[:300]) or "Hello — this is a preview of my voice."
+    ad = get_adapter()
+    chunks = []
+    for sentence in split_sentences(text):
+        async for chunk in ad.synth_stream(sentence, v):
+            chunks.append(chunk)
+    pcm = b"".join(chunks)
+    return Response(content=wav_header(ad.sample_rate, len(pcm)) + pcm, media_type="audio/wav")
 
 @app.get("/v1/tts/voices")
 async def list_voices(tenant=Depends(verify_api_key)):
