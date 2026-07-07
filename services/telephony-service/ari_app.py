@@ -171,6 +171,8 @@ class RTPBridge:
                        "assistant, and state why you are calling. Then ask your first question.",
             }))
 
+            rx_count = [0]; tx_count = [0]
+
             async def rtp_in():
                 while not stop.is_set():
                     try:
@@ -178,6 +180,10 @@ class RTPBridge:
                             loop.sock_recvfrom(sock, 4096), timeout=0.5)
                     except asyncio.TimeoutError:
                         continue
+                    if rx_count[0] == 0:
+                        print(f"[bridge:{self.rtp_port}] FIRST RTP IN from {addr} "
+                              f"({len(data)} bytes)", flush=True)
+                    rx_count[0] += 1
                     self.remote = addr
                     pcm = data[12:]  # strip 12-byte RTP header (slin16 payload)
                     await gw.send(pcm)
@@ -187,6 +193,10 @@ class RTPBridge:
                     if stop.is_set():
                         break
                     if isinstance(msg, bytes):
+                        if tx_count[0] == 0:
+                            print(f"[bridge:{self.rtp_port}] first agent audio "
+                                  f"({len(msg)} bytes) -> remote={self.remote}", flush=True)
+                        tx_count[0] += 1
                         # 24k TTS PCM -> 16k for slin16 call leg
                         pcm16k, _ = audioop.ratecv(msg, 2, 1, 24000, 16000, None)
                         # packetize 20ms (=640 bytes @16k mono PCM16)
@@ -210,6 +220,8 @@ class RTPBridge:
                             self._log_line("agent", d["text"])
 
             await asyncio.gather(rtp_in(), ws_out(), return_exceptions=True)
+            print(f"[bridge:{self.rtp_port}] done — rtp packets in={rx_count[0]} "
+                  f"agent audio chunks out={tx_count[0]} remote={self.remote}", flush=True)
         sock.close()
 
 async def ari_events():
