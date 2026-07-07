@@ -148,6 +148,7 @@ class RTPBridge:
         self.rtp_port = rtp_port
         self.call = call
         self.remote = None
+        self.pt = None                 # RTP payload type — mirrored from asterisk's own packets
         self.seq = 0; self.ts = 0; self.ssrc = 0x56414920
 
     def _log_line(self, role: str, text: str):
@@ -189,8 +190,11 @@ class RTPBridge:
                     except asyncio.TimeoutError:
                         continue
                     if rx_count[0] == 0:
+                        # mirror asterisk's own payload type — sending a different PT makes
+                        # asterisk silently DROP our audio (one-way silent calls)
+                        self.pt = data[1] & 0x7F
                         print(f"[bridge:{self.rtp_port}] FIRST RTP IN from {addr} "
-                              f"({len(data)} bytes)", flush=True)
+                              f"({len(data)} bytes, payload_type={self.pt})", flush=True)
                     rx_count[0] += 1
                     self.remote = addr
                     pcm = data[12:]  # strip 12-byte RTP header (slin16 payload)
@@ -210,8 +214,8 @@ class RTPBridge:
                         # packetize 20ms (=640 bytes @16k mono PCM16)
                         for i in range(0, len(pcm16k), 640):
                             chunk = pcm16k[i:i+640]
-                            hdr = struct.pack("!BBHII", 0x80, 118, self.seq & 0xFFFF,
-                                              self.ts, self.ssrc)
+                            hdr = struct.pack("!BBHII", 0x80, self.pt if self.pt is not None else 118,
+                                              self.seq & 0xFFFF, self.ts, self.ssrc)
                             self.seq += 1; self.ts += len(chunk)//2
                             if self.remote:
                                 transport.sendto(hdr + chunk, self.remote)
