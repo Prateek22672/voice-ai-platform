@@ -167,6 +167,7 @@ services:
       SIP_TRUNK_USER: ${SIP_TRUNK_USER:-}
       SIP_TRUNK_PASS: ${SIP_TRUNK_PASS:-}
       SIP_DID_NUMBER: ${SIP_DID_NUMBER:-}   # caller ID (your purchased Telnyx number)
+      PUBLIC_IP: ${PUBLIC_IP:-}             # VPS public IP for SDP (auto-detected if empty)
 
   telephony-service:
     profiles: [telephony]

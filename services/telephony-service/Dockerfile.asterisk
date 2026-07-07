@@ -2,7 +2,7 @@
 # still ships Asterisk 18 (includes ARI + externalMedia, which our bridge needs).
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends asterisk ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends asterisk ca-certificates iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY services/telephony-service/asterisk-config/ /etc/asterisk/
 COPY services/telephony-service/entrypoint-asterisk.sh /entrypoint.sh
