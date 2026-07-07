@@ -156,9 +156,18 @@ class RTPBridge:
              "t": round(time.time() - self.call.get("started", time.time()), 1)})
 
     async def run(self, stop: asyncio.Event):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.bind(("0.0.0.0", self.rtp_port)); sock.setblocking(False)
         loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        bridge = self
+
+        # Proper asyncio datagram endpoint: the old wait_for(sock_recvfrom) loop silently
+        # dropped every packet (cancellation bug) -> rx=0 -> silent calls. This is callback
+        # driven and cannot miss packets.
+        class _RTPProto(asyncio.DatagramProtocol):
+            def datagram_received(_self, data, addr):
+                queue.put_nowait((data, addr))
+        transport, _ = await loop.create_datagram_endpoint(
+            _RTPProto, local_addr=("0.0.0.0", self.rtp_port))
         async with websockets.connect(GW_WS) as gw:
             # greet:true -> the agent SPEAKS FIRST when the callee answers (an outbound call
             # where the callee has to talk first feels broken).
@@ -176,8 +185,7 @@ class RTPBridge:
             async def rtp_in():
                 while not stop.is_set():
                     try:
-                        data, addr = await asyncio.wait_for(
-                            loop.sock_recvfrom(sock, 4096), timeout=0.5)
+                        data, addr = await asyncio.wait_for(queue.get(), timeout=0.5)
                     except asyncio.TimeoutError:
                         continue
                     if rx_count[0] == 0:
@@ -206,7 +214,7 @@ class RTPBridge:
                                               self.ts, self.ssrc)
                             self.seq += 1; self.ts += len(chunk)//2
                             if self.remote:
-                                await loop.sock_sendto(sock, hdr + chunk, self.remote)
+                                transport.sendto(hdr + chunk, self.remote)
                             await asyncio.sleep(0.02)  # pace at real time
                     else:
                         # text events from the gateway = the conversation, fully transcribed
@@ -222,7 +230,7 @@ class RTPBridge:
             await asyncio.gather(rtp_in(), ws_out(), return_exceptions=True)
             print(f"[bridge:{self.rtp_port}] done — rtp packets in={rx_count[0]} "
                   f"agent audio chunks out={tx_count[0]} remote={self.remote}", flush=True)
-        sock.close()
+        transport.close()
 
 async def ari_events():
     """Connect ARI WebSocket; handle StasisStart for inbound + originated calls."""
