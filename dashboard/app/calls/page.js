@@ -5,36 +5,61 @@ import { Phone, PhoneOff, Loader2, ChevronDown, ChevronUp, RefreshCw } from 'luc
 import { apiBase } from '../lib/api';
 
 const GW = apiBase(8090); // api-gateway → telephony-service
+const TTS = apiBase(8002); // tts-service (voice catalog)
 const AUTH = { Authorization: 'Bearer dev-test-key', 'Content-Type': 'application/json' };
+
+// Shared professional conduct baked into every scenario: confident, courteous, handles
+// questions instead of dodging them, and never bluffs.
+const CONDUCT =
+  ' Speaking style: confident, courteous and professional, like a top-tier customer-care executive. ' +
+  'Open every reply with a very short sentence. Ask exactly ONE question at a time and wait. ' +
+  'If the person asks a question, answer it helpfully FIRST, then continue. If you do not know a ' +
+  'specific detail (exact price, address, legal terms), say a specialist from the team will follow up ' +
+  'with the exact details — never invent facts. If they are busy, offer to call back and end politely. ' +
+  'If they are not interested, thank them warmly and end the call. Keep every reply under two sentences.';
 
 const SCENARIOS = [
   {
     id: 'interview',
     title: 'Interview screening',
-    desc: 'Screens a candidate: experience, skills, availability. One question at a time.',
+    desc: 'Professionally screens a candidate: experience, skills, availability.',
     prompt:
-      'You are a professional AI interview assistant making a phone call on behalf of the hiring team. ' +
-      'You MUST say you are an AI assistant at the start. Politely screen the candidate about their ' +
-      'software experience, key skills, current role and notice period. Ask exactly ONE short question ' +
-      'at a time and wait for the answer. Be warm and professional. Keep every reply under two sentences. ' +
-      'After 4-5 questions, thank them and say the team will follow up.',
+      'You are a professional AI interview assistant calling on behalf of the hiring team. ' +
+      'You MUST say you are an AI assistant at the start. Screen the candidate about their software ' +
+      'experience, key skills, current role, notice period and salary expectations. After 4-5 ' +
+      'questions, summarize what you heard in one sentence, thank them, and say the team will follow up.' +
+      CONDUCT,
     greeting:
-      'Greet the person, say you are an AI assistant calling on behalf of the hiring team about their ' +
-      'job application, and ask if now is a good time for a quick two-minute screening.',
+      'Greet the person by name if known, say you are an AI assistant calling on behalf of the hiring ' +
+      'team about their job application, and ask if now is a good time for a quick two-minute screening.',
   },
   {
     id: 'realestate',
-    title: 'Real-estate interest',
-    desc: 'Gauges interest in property offerings; collects budget and preferred location.',
+    title: 'Real-estate assistant',
+    desc: 'Presents properties, answers queries, collects budget, location & timeline.',
     prompt:
-      'You are a friendly AI assistant calling from a real-estate company. You MUST say you are an AI ' +
-      'assistant at the start. Your goal: find out if the person is interested in our residential ' +
-      'properties. Ask ONE short question at a time: are they looking to buy, preferred location, ' +
-      'budget range, timeline. Be respectful — if they are not interested, thank them and end warmly. ' +
-      'Keep every reply under two sentences.',
+      'You are a professional AI real-estate assistant calling from the sales team. You MUST say you ' +
+      'are an AI assistant at the start. Goal: understand what the person is looking for and qualify ' +
+      'their interest: buying or investing, preferred location, budget range, timeline, and financing ' +
+      'needs. Answer their questions about the process confidently; for exact prices or site visits, ' +
+      'offer to have a property specialist call back and confirm their preferred time.' +
+      CONDUCT,
     greeting:
-      'Greet the person, say you are an AI assistant calling from the real-estate team, and ask if ' +
-      'they have a minute to talk about property options.',
+      'Greet the person by name if known, say you are an AI assistant calling from the real-estate ' +
+      'team, and ask if they have a minute to talk about finding the right property for them.',
+  },
+  {
+    id: 'support',
+    title: 'Customer follow-up',
+    desc: 'Checks in on a customer: satisfaction, issues, and next steps.',
+    prompt:
+      'You are a professional AI customer-care assistant making a courtesy follow-up call. You MUST ' +
+      'say you are an AI assistant at the start. Goal: check the customer is satisfied, note any ' +
+      'issues or questions they have, and reassure them the team will resolve anything outstanding. ' +
+      'Collect a clear description of any problem they mention.' + CONDUCT,
+    greeting:
+      'Greet the person by name if known, say you are an AI assistant calling to follow up on their ' +
+      'recent experience, and ask if they have a quick minute.',
   },
   {
     id: 'custom',
@@ -65,6 +90,8 @@ export default function CallsPage() {
   const [customTopic, setCustomTopic] = useState('');
   const [extraContext, setExtraContext] = useState('');
   const [maxMin, setMaxMin] = useState(5); // auto-hangup limit (cost control)
+  const [voice, setVoice] = useState(''); // '' = platform default (Voice Studio live voice)
+  const [voices, setVoices] = useState([]);
   const [placing, setPlacing] = useState(false);
   const [msg, setMsg] = useState(null); // {ok, text}
   const [calls, setCalls] = useState([]);
@@ -101,6 +128,11 @@ export default function CallsPage() {
 
   useEffect(() => {
     loadCalls();
+    // natural-voice catalog for the per-call voice picker
+    fetch(`${TTS}/v1/tts/catalog`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => setVoices(d.voices || []))
+      .catch(() => {});
     const id = setInterval(() => {
       loadCalls();
       if (open) loadTranscript(open); // live transcript while a call runs
@@ -114,9 +146,8 @@ export default function CallsPage() {
       const topic = customTopic.trim() || 'a friendly check-in call';
       return {
         prompt:
-          `You are a friendly AI assistant on a phone call. You MUST say you are an AI assistant at ` +
-          `the start. The purpose of this call: ${topic}. Ask ONE short question at a time, keep every ` +
-          `reply under two sentences, and be polite. If the person is busy or uninterested, thank them and end.` +
+          `You are a professional AI assistant on a phone call. You MUST say you are an AI assistant ` +
+          `at the start. The purpose of this call: ${topic}.` + CONDUCT +
           (extraContext.trim() ? ` Extra context: ${extraContext.trim()}` : ''),
         greeting:
           `Greet the person, say you are an AI assistant, and briefly state you are calling about: ${topic}.`,
@@ -143,7 +174,7 @@ export default function CallsPage() {
         method: 'POST',
         headers: AUTH,
         body: JSON.stringify({ to: num, agent_prompt: prompt, greeting_prompt: greeting, scenario,
-                               max_duration_s: maxMin * 60 }),
+                               voice: voice || undefined, max_duration_s: maxMin * 60 }),
       });
       const d = await r.json();
       if (r.ok) {
@@ -247,7 +278,7 @@ export default function CallsPage() {
         />
 
         <p className="mb-2 mt-5 text-xs uppercase tracking-wide text-white/50">What should the agent talk about?</p>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {SCENARIOS.map((s) => (
             <button
               key={s.id}
@@ -280,6 +311,25 @@ export default function CallsPage() {
             />
           </>
         )}
+
+        <label className="mb-1 mt-4 block text-xs uppercase tracking-wide text-white/50">
+          Agent voice
+        </label>
+        <select
+          value={voice}
+          onChange={(e) => setVoice(e.target.value)}
+          className="w-full rounded-xl border border-white/10 bg-black px-4 py-3 text-sm text-white outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+        >
+          <option value="">Platform default (live Voice Studio voice)</option>
+          {voices.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.name} — {v.accent} {v.gender}{v.featured ? ' ★' : ''} ({v.tag})
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-white/40">
+          Preview any voice on the <a href="/voices" className="underline decoration-white/30 hover:decoration-white">Voices</a> page before choosing.
+        </p>
 
         <label className="mb-1 mt-4 block text-xs uppercase tracking-wide text-white/50">
           Extra context (optional — name, company, details the agent should know)

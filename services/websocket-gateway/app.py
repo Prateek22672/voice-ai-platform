@@ -24,21 +24,22 @@ FILLER_ENABLED = os.getenv("FILLER_ENABLED", "1") == "1"
 FILLERS = ["Mm-hmm.", "Okay.", "Alright.", "Right."]
 _filler_cache: dict[str, bytes] = {}
 
-async def _filler_pcm(text: str) -> bytes:
-    if text not in _filler_cache:
+async def _filler_pcm(text: str, voice: str = "") -> bytes:
+    key = (text, voice)
+    if key not in _filler_cache:
         try:
             async with websockets.connect(TTS_WS) as tts:
-                await tts.send(json.dumps({"text": text}))
+                await tts.send(json.dumps({"text": text, "voice": voice or None}))
                 chunks = []
                 async for msg in tts:
                     if isinstance(msg, bytes):
                         chunks.append(msg)
                     elif json.loads(msg).get("type") == "done":
                         break
-                _filler_cache[text] = b"".join(chunks)
+                _filler_cache[key] = b"".join(chunks)
         except Exception:
-            _filler_cache[text] = b""
-    return _filler_cache[text]
+            _filler_cache[key] = b""
+    return _filler_cache[key]
 
 # Spoken re-prompts for when the user clearly spoke but nothing intelligible came back. Escalates
 # across consecutive misses; a cooldown stops it nagging on noise; resets on the next good transcript.
@@ -67,6 +68,7 @@ async def agent_stream(ws: WebSocket):
     last_reprompt = 0.0            # cooldown clock so we never nag on repeated background noise
     sess_turns = 0                 # metrics: completed agent turns this session
     sess_first_audio = []          # metrics: per-turn ms from transcript -> first agent audio
+    session_voice = ""             # per-session TTS voice (from the start event); "" = platform default
 
     async with httpx.AsyncClient(timeout=60) as http:
         # ---- emergency kill-switch: refuse new sessions while the service is disabled ----
@@ -98,7 +100,7 @@ async def agent_stream(ws: WebSocket):
                     await ws.send_text(json.dumps({"type": "transcript", "text": text}))
                     if FILLER_ENABLED:
                         # instant acknowledgement while the real reply is being generated
-                        pcm = await _filler_pcm(random.choice(FILLERS))
+                        pcm = await _filler_pcm(random.choice(FILLERS), session_voice)
                         if pcm:
                             await ws.send_bytes(pcm)
                 async with http.stream("POST", f"{CONV_URL}/v1/sessions/{session_id}/turn",
@@ -113,7 +115,8 @@ async def agent_stream(ws: WebSocket):
                             speaking.set()
                             if tts is None:               # open once, not per-sentence (saves ~100ms/sentence)
                                 tts = await websockets.connect(TTS_WS)
-                            await tts.send(json.dumps({"text": sentence}))
+                            await tts.send(json.dumps({"text": sentence,
+                                                       "voice": session_voice or None}))
                             async for msg in tts:
                                 if isinstance(msg, bytes):
                                     if first_audio_ms is None:
@@ -155,7 +158,7 @@ async def agent_stream(ws: WebSocket):
             tts = None
             try:
                 tts = await websockets.connect(TTS_WS)
-                await tts.send(json.dumps({"text": line}))
+                await tts.send(json.dumps({"text": line, "voice": session_voice or None}))
                 async for msg in tts:
                     if isinstance(msg, bytes):
                         await ws.send_bytes(msg)
@@ -224,6 +227,7 @@ async def agent_stream(ws: WebSocket):
                 if msg.get("text"):
                     ev = json.loads(msg["text"])
                     if ev.get("event") == "start":
+                        session_voice = (ev.get("voice") or "").strip()   # per-session natural voice
                         r = await http.post(f"{CONV_URL}/v1/sessions", headers=HDRS,
                                             json={"system_prompt": ev.get("system_prompt", "")})
                         session_id = r.json()["session_id"]

@@ -91,6 +91,7 @@ async def originate(body: dict, tenant=Depends(verify_api_key)):
                       "agent_prompt": body.get("agent_prompt", ""),
                       "greeting_prompt": body.get("greeting_prompt", ""),
                       "scenario": body.get("scenario", "custom"),
+                      "voice": (body.get("voice") or "").strip(),   # per-call natural voice
                       "max_duration_s": limit,
                       "transcript": [],
                       "tenant_id": tenant["tenant_id"], "started": time.time()}
@@ -178,6 +179,7 @@ class RTPBridge:
             await gw.send(json.dumps({
                 "event": "start",
                 "system_prompt": self.call.get("agent_prompt", ""),
+                "voice": self.call.get("voice") or None,
                 "greet": True,
                 "greeting_prompt": self.call.get("greeting_prompt")
                     or "Greet the person warmly in one short sentence, say you are an AI "

@@ -268,7 +268,63 @@ curl https://voice.foliofyx.in/v1/status -H "Authorization: Bearer vk_YOURKEY"
 
 ---
 
-## 6. Notes & gotchas
+## 6. Phone Calls API — for external websites (e.g., a realtor site)
+
+The platform is also a **calling service**: any product with a `vk_` API key can place real phone
+calls where our AI agent speaks (natural voice), listens (Whisper), converses (Groq), and returns
+the **full transcript**. Same auth model as everything else — create a key in Admin per website
+(e.g. `realtor-site`) so usage is tracked separately.
+
+### Place a call
+```bash
+curl -X POST https://voice.foliofyx.in/v1/calls \
+  -H "Authorization: Bearer vk_YOURKEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": "+919876543210",
+    "scenario": "realestate",
+    "voice": "af_heart",
+    "max_duration_s": 300,
+    "agent_prompt": "You are a professional AI real-estate assistant calling from Sunrise Realty. You MUST say you are an AI assistant at the start. Qualify the lead: buying or investing, preferred location, budget, timeline. Answer questions helpfully; for exact prices offer a specialist callback. One short question at a time; under two sentences per reply.",
+    "greeting_prompt": "Greet the person by name (Ravi), say you are an AI assistant from Sunrise Realty following up on their enquiry, and ask if now is a good time."
+  }'
+# -> {"call_id":"...","status":"dialing","max_duration_s":300}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `to` | ✅ | E.164, e.g. `+91…` / `+1…` |
+| `agent_prompt` | ✅ | The agent's full persona + goal. Always include the AI disclosure instruction. |
+| `greeting_prompt` | — | How the agent opens the call (it always speaks first). |
+| `voice` | — | Any id from `GET /v1/tts/catalog` (e.g. `af_heart`, `bf_emma`). Omit = platform default. |
+| `max_duration_s` | — | Auto hang-up. Default 300 (5 min), hard cap 1800. |
+| `scenario` | — | Free label for your own reporting. |
+
+### Track the call + get the conversation
+```bash
+GET /v1/calls                      # list recent calls (status, duration, turns)
+GET /v1/calls/{call_id}            # one call: status dialing|answered|ended, duration_s
+GET /v1/calls/{call_id}/transcript # the full conversation, live during the call:
+# {"transcript":[{"role":"agent","text":"Hello, I'm ...","t":7.2},
+#                {"role":"caller","text":"Yes, tell me more","t":14.9}, ...]}
+POST /v1/calls/{call_id}/hangup    # end it early
+```
+Poll `/transcript` every few seconds during a call for a live view; after `status:"ended"` the
+transcript is final and stored server-side.
+
+### Integration pattern for the realtor website
+1. Owner creates an API key named `realtor-site` in **Admin** → put it in the site's backend env.
+2. Their backend calls `POST /v1/calls` when a lead should be contacted (form submission, follow-up
+   queue, missed enquiry).
+3. Poll `GET /v1/calls/{id}` until `ended`, then fetch `/transcript` and save the lead's answers
+   (budget, location, timeline) into their CRM.
+4. The status dot (§3) works for them too, and their traffic shows in Admin → Connected clients.
+
+> **Compliance:** the agent must disclose it's an AI (keep that line in every `agent_prompt`), keep
+> calls inside 9am–9pm for India, and honor do-not-call requests. For production outbound marketing
+> in India, DLT registration applies.
+
+## 7. Notes & gotchas
 
 - **CORS** is open (`*`), so you can call `/v1/status`, `/v1/tts`, `/v1/tts/catalog` directly from
   your interview platform's frontend.
