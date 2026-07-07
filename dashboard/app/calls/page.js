@@ -70,6 +70,16 @@ export default function CallsPage() {
   const [calls, setCalls] = useState([]);
   const [open, setOpen] = useState(null); // call_id expanded
   const [transcripts, setTranscripts] = useState({}); // call_id -> transcript
+  const [nowTs, setNowTs] = useState(Date.now() / 1000); // 1s ticker for the live-call timer
+
+  // one call at a time in R&D — the first dialing/answered call is "the live call"
+  const activeCall = calls.find((c) => c.status === 'dialing' || c.status === 'answered') || null;
+
+  useEffect(() => {
+    if (!activeCall) return;
+    const id = setInterval(() => setNowTs(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, [activeCall]);
 
   const loadCalls = useCallback(async () => {
     try {
@@ -120,9 +130,10 @@ export default function CallsPage() {
 
   async function placeCall() {
     setMsg(null);
-    const num = to.trim();
+    // normalize: people paste "+91 88803 33777" / "+1 (469) 468-1474" — strip separators
+    const num = to.trim().replace(/[\s\-().]/g, '');
     if (!/^\+\d{8,15}$/.test(num)) {
-      setMsg({ ok: false, text: 'Enter the number in E.164 format, e.g. +919876543210 or +15551234567.' });
+      setMsg({ ok: false, text: 'Enter the number with country code, e.g. +91 88803 33777 or +1 469 468 1474 (spaces are fine).' });
       return;
     }
     setPlacing(true);
@@ -175,6 +186,53 @@ export default function CallsPage() {
           transcribes with Whisper, and saves the full conversation below.
         </p>
       </header>
+
+      {/* LIVE CALL banner — always visible while a call is running */}
+      {activeCall ? (
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-4 backdrop-blur-xl ${
+            activeCall.status === 'answered'
+              ? 'border-[#3fb950]/50 bg-[#3fb950]/[0.08]'
+              : 'border-[#e3b341]/50 bg-[#e3b341]/[0.08]'
+          }`}
+        >
+          <span className="flex items-center gap-3">
+            <span className="relative flex h-3 w-3">
+              <span
+                className={`absolute inline-flex h-full w-full animate-ping rounded-full ${
+                  activeCall.status === 'answered' ? 'bg-[#3fb950]/60' : 'bg-[#e3b341]/60'
+                }`}
+              />
+              <span
+                className={`relative inline-flex h-3 w-3 rounded-full ${
+                  activeCall.status === 'answered' ? 'bg-[#3fb950]' : 'bg-[#e3b341]'
+                }`}
+              />
+            </span>
+            <span className="text-sm font-semibold">
+              {activeCall.status === 'answered' ? 'LIVE CALL' : 'DIALING…'}
+            </span>
+            <span className="font-mono text-sm text-white/80">{activeCall.to}</span>
+            <span className="tabular-nums text-sm text-white/60">
+              {(() => {
+                const s = Math.max(0, Math.floor(nowTs - (activeCall.started || nowTs)));
+                return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+              })()}
+            </span>
+          </span>
+          <button
+            onClick={() => hangup(activeCall.call_id)}
+            className="inline-flex items-center gap-2 rounded-full bg-[#e5484d] px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#e5484d]/85"
+          >
+            <PhoneOff aria-hidden="true" className="h-4 w-4" /> End call
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3 backdrop-blur-xl">
+          <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+          <span className="text-sm text-white/55">No call in progress</span>
+        </div>
+      )}
 
       {/* place a call */}
       <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 backdrop-blur-xl">

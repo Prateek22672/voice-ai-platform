@@ -672,10 +672,31 @@ export default function InsightsPage() {
         <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
           <h2 className="text-base font-semibold">Phone-call cost estimator</h2>
           <p className="mt-1 text-xs text-white/45">
-            Calls are capped at {callMin} min on the Calls page (auto hang-up). AI cost = STT{' '}
-            {money(0.000667)}/min + LLM ≈ {money(0.0018)}/min; TTS is self-hosted (free). Set the
-            trunk rate to your Telnyx per-minute price for the destination (see telnyx.com/pricing).
+            Calls auto-hang-up at the Calls-page cap ({callMin} min). Per-minute = Telnyx trunk rate
+            + AI ({money(0.000667)} STT + ≈{money(0.0018)} LLM; TTS self-hosted, free). Trunk rates
+            below are typical list prices — confirm YOUR exact rate in the Telnyx portal
+            (Outbound Voice Profile → &ldquo;View rates&rdquo;) and adjust the field.
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-white/45">Destination preset:</span>
+            {[
+              { label: '🇺🇸 US (~$0.0070/min)', rate: 0.007 },
+              { label: '🇮🇳 India (~$0.0350/min)', rate: 0.035 },
+            ].map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setTrunkRate(p.rate)}
+                className={`rounded-full border px-3.5 py-1.5 text-xs transition-colors ${focusRing} ${
+                  Math.abs(trunkRate - p.rate) < 1e-9
+                    ? 'border-white/40 bg-white/10 font-semibold text-white'
+                    : 'border-white/10 text-white/55 hover:border-white/30 hover:text-white'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="text-xs text-white/55">
               calls per month
@@ -704,22 +725,39 @@ export default function InsightsPage() {
           </div>
           {(() => {
             const aiPerMin = 0.000667 + 0.0018; // Groq STT turbo + LLM (~450 tok/min at list price)
-            const perCall = callMin * (trunkRate + aiPerMin);
+            const perMin = trunkRate + aiPerMin;
+            const perCall = callMin * perMin;
             const monthly = callCount * perCall;
             return (
-              <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
-                <span>
-                  Worst-case per call ({callMin} min):{' '}
-                  <span className="text-lg font-semibold tabular-nums text-white">{money(perCall)}</span>
-                </span>
-                <span>
-                  {callCount.toLocaleString()} calls/month:{' '}
-                  <span className="text-lg font-semibold tabular-nums text-white">{money(monthly)}</span>
-                </span>
-                <span className="text-xs text-white/45">
-                  of which trunk {money(callMin * trunkRate)} + AI {money(callMin * aiPerMin)} per call
-                </span>
-              </div>
+              <>
+                <div className="mt-4 rounded-lg border border-white/10 bg-black/30 px-4 py-3 text-sm">
+                  <span className="text-white/55">Precise per-minute:</span>{' '}
+                  <span className="tabular-nums">trunk {money(trunkRate)}</span>
+                  <span className="text-white/40"> + </span>
+                  <span className="tabular-nums">STT {money(0.000667)}</span>
+                  <span className="text-white/40"> + </span>
+                  <span className="tabular-nums">LLM ≈{money(0.0018)}</span>
+                  <span className="text-white/40"> + </span>
+                  <span className="tabular-nums text-[#3fb950]">TTS {money(0)}</span>
+                  <span className="text-white/40"> = </span>
+                  <span className="text-base font-semibold tabular-nums text-white">
+                    {money(perMin)}/min
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
+                  <span>
+                    Worst-case per call ({callMin} min):{' '}
+                    <span className="text-lg font-semibold tabular-nums text-white">{money(perCall)}</span>
+                  </span>
+                  <span>
+                    {callCount.toLocaleString()} calls/month:{' '}
+                    <span className="text-lg font-semibold tabular-nums text-white">{money(monthly)}</span>
+                  </span>
+                  <span className="text-xs text-white/45">
+                    of which trunk {money(callMin * trunkRate)} + AI {money(callMin * aiPerMin)} per call
+                  </span>
+                </div>
+              </>
             );
           })()}
         </section>
