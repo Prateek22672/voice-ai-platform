@@ -150,6 +150,8 @@ class RTPBridge:
         self.remote = None
         self.pt = None                 # RTP payload type — mirrored from asterisk's own packets
         self.seq = 0; self.ts = 0; self.ssrc = 0x56414920
+        self._rs_in = None             # resample state 8k->16k (caller -> STT)
+        self._rs_out = None            # resample state 24k->8k (TTS -> caller)
 
     def _log_line(self, role: str, text: str):
         self.call.setdefault("transcript", []).append(
@@ -197,7 +199,12 @@ class RTPBridge:
                               f"({len(data)} bytes, payload_type={self.pt})", flush=True)
                     rx_count[0] += 1
                     self.remote = addr
-                    pcm = data[12:]  # strip 12-byte RTP header (slin16 payload)
+                    payload = data[12:]  # strip 12-byte RTP header
+                    if self.pt == 8:     # alaw @8k -> PCM16 @16k for the STT pipeline
+                        pcm8 = audioop.alaw2lin(payload, 2)
+                        pcm, self._rs_in = audioop.ratecv(pcm8, 2, 1, 8000, 16000, self._rs_in)
+                    else:                # slin16: already PCM16 @16k
+                        pcm = payload
                     await gw.send(pcm)
 
             async def ws_out():
@@ -209,14 +216,21 @@ class RTPBridge:
                             print(f"[bridge:{self.rtp_port}] first agent audio "
                                   f"({len(msg)} bytes) -> remote={self.remote}", flush=True)
                         tx_count[0] += 1
-                        # 24k TTS PCM -> 16k for slin16 call leg
-                        pcm16k, _ = audioop.ratecv(msg, 2, 1, 24000, 16000, None)
-                        # packetize 20ms (=640 bytes @16k mono PCM16)
-                        for i in range(0, len(pcm16k), 640):
-                            chunk = pcm16k[i:i+640]
+                        if self.pt == 8:
+                            # 24k TTS PCM -> 8k -> alaw (same codec as the phone leg: asterisk
+                            # relays it untouched — its own transcoder was eating our audio)
+                            pcm8k, self._rs_out = audioop.ratecv(msg, 2, 1, 24000, 8000, self._rs_out)
+                            out = audioop.lin2alaw(pcm8k, 2)
+                            step, ts_step = 160, 160          # 20ms alaw @8k
+                        else:
+                            # slin16 fallback: 24k -> 16k PCM
+                            out, self._rs_out = audioop.ratecv(msg, 2, 1, 24000, 16000, self._rs_out)
+                            step, ts_step = 640, 320          # 20ms PCM16 @16k
+                        for i in range(0, len(out), step):
+                            chunk = out[i:i+step]
                             hdr = struct.pack("!BBHII", 0x80, self.pt if self.pt is not None else 118,
                                               self.seq & 0xFFFF, self.ts, self.ssrc)
-                            self.seq += 1; self.ts += len(chunk)//2
+                            self.seq += 1; self.ts += ts_step
                             if self.remote:
                                 transport.sendto(hdr + chunk, self.remote)
                             await asyncio.sleep(0.02)  # pace at real time
@@ -283,10 +297,12 @@ async def handle_stasis(ev, port_counter):
     port = port_counter[0]; port_counter[0] += 2
     async with httpx.AsyncClient(auth=ARI_AUTH, timeout=30) as c:
         await c.post(f"{ARI_URL}/ari/channels/{ch['id']}/answer")
-        # create externalMedia channel -> RTP to us
+        # create externalMedia channel -> RTP to us. alaw = the SAME codec as the phone leg,
+        # so asterisk does zero transcoding (its slin16->alaw path silently dropped our audio
+        # -> one-way silent calls). We transcode alaw<->PCM ourselves below.
         r = await c.post(f"{ARI_URL}/ari/channels/externalMedia", params={
             "app": "voiceai", "external_host": f"{EXTERNAL_MEDIA_HOST}:{port}",
-            "format": "slin16"})
+            "format": "alaw"})
         em = r.json()
         # bridge caller + externalMedia
         br = (await c.post(f"{ARI_URL}/ari/bridges", params={"type": "mixing"})).json()
