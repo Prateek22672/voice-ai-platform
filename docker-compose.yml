@@ -116,6 +116,8 @@ services:
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-300}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
       ALLOW_ADMIN: ${ALLOW_ADMIN:-true}
+      TEL_URL: http://host.docker.internal:8004   # telephony-service runs on the HOST network
+    extra_hosts: [ "host.docker.internal:host-gateway" ]
     ports: ["8090:8080"]   # host 8090 (8080 is taken by another app on this VPS)
     depends_on: { postgres: { condition: service_healthy } }
 
@@ -170,16 +172,17 @@ services:
     profiles: [telephony]
     build: { context: ., dockerfile: services/telephony-service/Dockerfile }
     restart: unless-stopped
+    # HOST network like asterisk: RTP (UDP) must flow directly between asterisk and this
+    # bridge — Docker's UDP port-proxy silently broke the media path (silent calls).
+    network_mode: host
     environment:
-      ARI_URL: http://host.docker.internal:8088
-      GW_WS: ws://websocket-gateway:8000/v1/agent/stream
+      ARI_URL: http://127.0.0.1:8088                          # asterisk, same host network
+      GW_WS: ws://127.0.0.1:8000/v1/agent/stream              # websocket-gateway's published port
       SIP_DID_NUMBER: ${SIP_DID_NUMBER:-}
-      EXTERNAL_MEDIA_HOST: ${EXTERNAL_MEDIA_HOST:-127.0.0.1}  # asterisk (host net) -> our published RTP port
+      EXTERNAL_MEDIA_HOST: ${EXTERNAL_MEDIA_HOST:-127.0.0.1}  # asterisk -> our RTP socket, both on host
       VOICE_DIR: /app/voices                                  # persists call transcripts
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
-    extra_hosts: [ "host.docker.internal:host-gateway" ]
     volumes: [ "./voices:/app/voices" ]
-    ports: ["8004:8004", "18000-18020:18000-18020/udp"]
 
   # ---------------- monitoring profile ----------------
   prometheus:
