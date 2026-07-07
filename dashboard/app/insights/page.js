@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { apiBase } from '../lib/api';
 const STT_BASE = apiBase(8001); // stt-service (direct :8001, or same-origin behind the tunnel)
+const LLM_BASE = apiBase(8003); // conversation-service (LLM usage)
 const AUTH_HEADER = { Authorization: 'Bearer dev-test-key' };
 
 const RATES_USD_PER_MIN = {
@@ -15,15 +16,21 @@ const RATES_USD_PER_MIN = {
   'distil-whisper-large-v3-en': 0.000333,
 };
 
+// which provider bills each STT model (for the per-provider bill split)
+const GROQ_STT_MODELS = ['whisper-large-v3', 'whisper-large-v3-turbo', 'distil-whisper-large-v3-en'];
+const isGroqStt = (m) => GROQ_STT_MODELS.includes(m);
+const isGroqLlm = (m) => (m || '').includes('groq') || (m || '').includes('llama');
+
 export default function InsightsPage() {
   const [currency, setCurrency] = useState('INR'); // 'USD' | 'INR'
   const [usage, setUsage] = useState(null);
+  const [llm, setLlm] = useState(null); // real LLM usage (tokens + cost)
   const [backendInfo, setBackendInfo] = useState(null);
   const [unreachable, setUnreachable] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchMsg, setSwitchMsg] = useState(null); // { ok: boolean, text: string }
   const [estMinutes, setEstMinutes] = useState(300);
-  const [estModel, setEstModel] = useState('gpt-4o-transcribe');
+  const [estModel, setEstModel] = useState('whisper-large-v3-turbo');
   const switchMsgTimer = useRef(null);
 
   const usdInr =
@@ -65,19 +72,33 @@ export default function InsightsPage() {
     }
   }, []);
 
+  const fetchLlm = useCallback(async () => {
+    try {
+      const res = await fetch(`${LLM_BASE}/v1/usage_llm`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('bad status');
+      setLlm(await res.json());
+    } catch {
+      /* LLM usage panel just shows — until reachable */
+    }
+  }, []);
+
   const refreshAll = useCallback(() => {
     fetchUsage();
     fetchBackend();
-  }, [fetchUsage, fetchBackend]);
+    fetchLlm();
+  }, [fetchUsage, fetchBackend, fetchLlm]);
 
   useEffect(() => {
     refreshAll();
-    const id = setInterval(fetchUsage, 10000);
+    const id = setInterval(() => {
+      fetchUsage();
+      fetchLlm();
+    }, 10000);
     return () => {
       clearInterval(id);
       if (switchMsgTimer.current) clearTimeout(switchMsgTimer.current);
     };
-  }, [refreshAll, fetchUsage]);
+  }, [refreshAll, fetchUsage, fetchLlm]);
 
   const showSwitchMsg = (ok, text) => {
     setSwitchMsg({ ok, text });
@@ -120,7 +141,12 @@ export default function InsightsPage() {
         headers: { ...AUTH_HEADER },
       });
       if (!res.ok) throw new Error('reset failed');
+      // reset the LLM counter too so both halves of the bill restart together
+      try {
+        await fetch(`${LLM_BASE}/v1/usage_llm/reset`, { method: 'POST', headers: { ...AUTH_HEADER } });
+      } catch { /* llm reset optional */ }
       await fetchUsage();
+      await fetchLlm();
     } catch {
       setUnreachable(true);
     }
@@ -131,6 +157,25 @@ export default function InsightsPage() {
   const totalMinutes = usage ? Number(usage.total_minutes) || 0 : 0;
   const totalCostUsd = usage ? Number(usage.est_cost_usd) || 0 : 0;
   const byModel = usage && Array.isArray(usage.by_model) ? usage.by_model : [];
+
+  // LLM usage (real logged token counts from the conversation service)
+  const llmByModel = llm && Array.isArray(llm.by_model) ? llm.by_model : [];
+  const llmCalls = llm ? Number(llm.total_calls) || 0 : 0;
+  const llmTokensIn = llm ? Number(llm.prompt_tokens) || 0 : 0;
+  const llmTokensOut = llm ? Number(llm.completion_tokens) || 0 : 0;
+  const llmCostUsd = llm ? Number(llm.est_cost_usd) || 0 : 0;
+
+  // per-provider bill split: measured usage × official list price
+  const groqSttUsd = byModel.filter((r) => isGroqStt(r.model))
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const openaiSttUsd = byModel.filter((r) => !isGroqStt(r.model))
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const groqLlmUsd = llmByModel.filter((r) => isGroqLlm(r.model))
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const openaiLlmUsd = llmByModel.filter((r) => !isGroqLlm(r.model))
+    .reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const groqBillUsd = groqSttUsd + groqLlmUsd;
+  const openaiBillUsd = openaiSttUsd + openaiLlmUsd;
 
   const activeBackend = backendInfo ? backendInfo.backend : null;
   const openaiReady = backendInfo ? !!backendInfo.openai_ready : false;
@@ -164,11 +209,11 @@ export default function InsightsPage() {
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              Insights <span className="text-white/55 font-normal">— STT usage &amp; cost</span>
+              Insights <span className="text-white/55 font-normal">— usage &amp; billing</span>
             </h1>
             <p className="mt-1 text-sm text-white/55">
-              Compare self-hosted (free) vs OpenAI (paid, ChatGPT-grade), and track exactly what
-              you spend.
+              Every STT call and LLM turn is logged on our server. Money shown = that measured
+              usage × the provider&apos;s official list price.
             </p>
           </div>
 
@@ -207,6 +252,56 @@ export default function InsightsPage() {
             STT service unreachable at {STT_BASE}. Start the STT service and hit Refresh.
           </div>
         )}
+
+        {/* Estimated bill by provider — the headline numbers */}
+        <section className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-[#3fb950]/30 bg-[#3fb950]/[0.04] backdrop-blur-xl p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold">Groq — estimated bill</h2>
+              <span className="rounded-full bg-[#3fb950]/15 px-2.5 py-0.5 text-xs font-semibold text-[#3fb950]">
+                billed key
+              </span>
+            </div>
+            <p className="mt-3 text-3xl font-bold tabular-nums">{money(groqBillUsd)}</p>
+            <ul className="mt-3 space-y-1.5 text-sm text-white/70">
+              <li className="flex justify-between">
+                <span>Transcription (Whisper)</span>
+                <span className="tabular-nums">{money(groqSttUsd)}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>LLM (Llama, {llmTokensIn.toLocaleString()} in / {llmTokensOut.toLocaleString()} out tokens)</span>
+                <span className="tabular-nums">{money(groqLlmUsd)}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold">OpenAI — estimated bill</h2>
+              <span className="rounded-full border border-white/10 px-2.5 py-0.5 text-xs text-white/55">
+                backup
+              </span>
+            </div>
+            <p className="mt-3 text-3xl font-bold tabular-nums">{money(openaiBillUsd)}</p>
+            <ul className="mt-3 space-y-1.5 text-sm text-white/70">
+              <li className="flex justify-between">
+                <span>Transcription (gpt-4o / whisper-1)</span>
+                <span className="tabular-nums">{money(openaiSttUsd)}</span>
+              </li>
+              <li className="flex justify-between">
+                <span>LLM</span>
+                <span className="tabular-nums">{money(openaiLlmUsd)}</span>
+              </li>
+            </ul>
+          </div>
+
+          <p className="text-xs text-white/45 md:col-span-2">
+            These are computed from calls logged on <em>our</em> server × official list prices —
+            they are estimates, not the invoice. The authoritative bill is the provider console
+            (console.groq.com → Usage / platform.openai.com → Usage). Kokoro TTS is self-hosted:
+            ₹0, nothing billed.
+          </p>
+        </section>
 
         {/* STT Mode switcher */}
         <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
@@ -318,11 +413,11 @@ export default function InsightsPage() {
         {/* Stat tiles */}
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
-            <p className="text-xs uppercase tracking-wide text-white/55">Total calls</p>
+            <p className="text-xs uppercase tracking-wide text-white/55">STT calls</p>
             <p className="mt-2 text-2xl font-semibold tabular-nums">
               {totalCalls.toLocaleString()}
             </p>
-            <p className="mt-1 text-xs text-white/55">transcription requests</p>
+            <p className="mt-1 text-xs text-white/55">each = one thing you said</p>
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
@@ -335,11 +430,11 @@ export default function InsightsPage() {
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
-            <p className="text-xs uppercase tracking-wide text-white/55">Total cost</p>
+            <p className="text-xs uppercase tracking-wide text-white/55">STT cost</p>
             <p className="mt-2 text-3xl font-bold tabular-nums text-white">
               {money(totalCostUsd)}
             </p>
-            <p className="mt-1 text-xs text-white/55">estimated, all models</p>
+            <p className="mt-1 text-xs text-white/55">all STT models combined</p>
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
@@ -351,27 +446,58 @@ export default function InsightsPage() {
           </div>
         </section>
 
+        {/* LLM tiles — the other half of the Groq key */}
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
+            <p className="text-xs uppercase tracking-wide text-white/55">LLM turns</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{llmCalls.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-white/55">agent replies generated</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
+            <p className="text-xs uppercase tracking-wide text-white/55">Tokens in</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{llmTokensIn.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-white/55">prompt + conversation history</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
+            <p className="text-xs uppercase tracking-wide text-white/55">Tokens out</p>
+            <p className="mt-2 text-2xl font-semibold tabular-nums">{llmTokensOut.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-white/55">what the agent said</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
+            <p className="text-xs uppercase tracking-wide text-white/55">LLM cost</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums text-white">{money(llmCostUsd)}</p>
+            <p className="mt-1 text-xs text-white/55">
+              {llm && llm.estimated_calls > 0
+                ? `${llm.estimated_calls} of ${llmCalls} calls token-counted locally`
+                : 'exact token counts from the API'}
+            </p>
+          </div>
+        </section>
+
         {/* Explainer */}
         <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-5">
           <h2 className="text-sm font-semibold text-white/55">What&apos;s being counted</h2>
           <p className="mt-2 text-sm leading-relaxed">
-            You&apos;ve made{' '}
-            <span className="font-semibold tabular-nums">{totalCalls.toLocaleString()}</span>{' '}
-            transcription calls covering{' '}
-            <span className="font-semibold tabular-nums">{totalMinutes.toFixed(2)}</span> minutes
-            of speech. Each call = one thing you said (one turn). Only your speech is billed —
-            silence is skipped by the voice detector. At{' '}
-            <span className="font-semibold tabular-nums">{currentRateLabel}</span>, that&apos;s{' '}
-            <span className="font-semibold tabular-nums">{money(totalCostUsd)}</span> so far.
+            Every turn is logged twice: the STT call that heard you (
+            <span className="font-semibold tabular-nums">{totalCalls.toLocaleString()}</span> calls,{' '}
+            <span className="font-semibold tabular-nums">{totalMinutes.toFixed(2)}</span> min of
+            speech — silence is never billed) and the LLM call that generated the reply (
+            <span className="font-semibold tabular-nums">{llmCalls.toLocaleString()}</span> turns,{' '}
+            <span className="font-semibold tabular-nums">
+              {(llmTokensIn + llmTokensOut).toLocaleString()}
+            </span>{' '}
+            tokens). Current STT rate:{' '}
+            <span className="font-semibold tabular-nums">{currentRateLabel}</span>. TTS (Kokoro) is
+            self-hosted — <span className="font-semibold">₹0, unmetered</span>.
           </p>
         </section>
 
         {/* Per-model table */}
         <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
-          <h2 className="text-base font-semibold">Usage by model</h2>
+          <h2 className="text-base font-semibold">STT usage by model</h2>
           {byModel.length === 0 ? (
             <p className="mt-4 text-sm text-white/55">
-              No OpenAI calls yet — switch to OpenAI mode and talk to the agent.
+              No cloud STT calls logged yet — talk to the agent and this fills in live.
             </p>
           ) : (
             <div className="mt-4 overflow-x-auto">
@@ -411,27 +537,92 @@ export default function InsightsPage() {
           )}
         </section>
 
+        {/* LLM usage by model */}
+        {llmByModel.length > 0 && (
+          <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
+            <h2 className="text-base font-semibold">LLM usage by model</h2>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/55">
+                    <th scope="col" className="pb-2 pr-4 font-medium">Model</th>
+                    <th scope="col" className="pb-2 pr-4 text-right font-medium">Turns</th>
+                    <th scope="col" className="pb-2 pr-4 text-right font-medium">Tokens in</th>
+                    <th scope="col" className="pb-2 pr-4 text-right font-medium">Tokens out</th>
+                    <th scope="col" className="pb-2 text-right font-medium">
+                      Cost ({currency === 'INR' ? '₹' : '$'})
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {llmByModel.map((row) => (
+                    <tr key={row.model} className="border-b border-white/10/60 last:border-0">
+                      <td className="py-2.5 pr-4 font-medium">{row.model}</td>
+                      <td className="py-2.5 pr-4 text-right tabular-nums">
+                        {(Number(row.calls) || 0).toLocaleString()}
+                      </td>
+                      <td className="py-2.5 pr-4 text-right tabular-nums">
+                        {(Number(row.prompt_tokens) || 0).toLocaleString()}
+                      </td>
+                      <td className="py-2.5 pr-4 text-right tabular-nums">
+                        {(Number(row.completion_tokens) || 0).toLocaleString()}
+                      </td>
+                      <td className="py-2.5 text-right tabular-nums">{money(row.cost_usd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         {/* Rate card + estimator */}
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
-            <h2 className="text-base font-semibold">Rate card</h2>
+            <h2 className="text-base font-semibold">Rate card (official list prices)</h2>
             <ul className="mt-4 space-y-3 text-sm">
               <li className="flex items-center justify-between border-b border-white/10/60 pb-3">
-                <span>gpt-4o-transcribe</span>
+                <span>
+                  Groq whisper-large-v3-turbo{' '}
+                  <span className="rounded-full bg-[#3fb950]/15 px-2 py-0.5 text-[10px] font-semibold text-[#3fb950]">
+                    ACTIVE STT
+                  </span>
+                </span>
+                <span className="tabular-nums">
+                  {money(0.000667)}
+                  <span className="text-white/55">/min</span>
+                </span>
+              </li>
+              <li className="flex items-center justify-between border-b border-white/10/60 pb-3">
+                <span>Groq whisper-large-v3</span>
+                <span className="tabular-nums">
+                  {money(0.00185)}
+                  <span className="text-white/55">/min</span>
+                </span>
+              </li>
+              <li className="flex items-center justify-between border-b border-white/10/60 pb-3">
+                <span>Groq Llama 3.3 70B (LLM)</span>
+                <span className="tabular-nums text-xs">
+                  {money(0.59)} <span className="text-white/55">in</span> · {money(0.79)}{' '}
+                  <span className="text-white/55">out /1M tokens</span>
+                </span>
+              </li>
+              <li className="flex items-center justify-between border-b border-white/10/60 pb-3">
+                <span>OpenAI gpt-4o-transcribe</span>
                 <span className="tabular-nums">
                   {money(0.006)}
                   <span className="text-white/55">/min</span>
                 </span>
               </li>
               <li className="flex items-center justify-between border-b border-white/10/60 pb-3">
-                <span>gpt-4o-mini-transcribe</span>
+                <span>OpenAI gpt-4o-mini-transcribe</span>
                 <span className="tabular-nums">
                   {money(0.003)}
                   <span className="text-white/55">/min</span>
                 </span>
               </li>
               <li className="flex items-center justify-between">
-                <span>Self-hosted Whisper</span>
+                <span>Self-hosted Whisper · Kokoro TTS</span>
                 <span className="font-semibold text-[#3fb950]">free</span>
               </li>
             </ul>
@@ -457,8 +648,10 @@ export default function InsightsPage() {
                   onChange={(e) => setEstModel(e.target.value)}
                   className={`mt-1 w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white ${focusRing}`}
                 >
-                  <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
-                  <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
+                  <option value="whisper-large-v3-turbo">Groq whisper-large-v3-turbo (active)</option>
+                  <option value="whisper-large-v3">Groq whisper-large-v3</option>
+                  <option value="gpt-4o-transcribe">OpenAI gpt-4o-transcribe</option>
+                  <option value="gpt-4o-mini-transcribe">OpenAI gpt-4o-mini-transcribe</option>
                 </select>
               </label>
             </div>

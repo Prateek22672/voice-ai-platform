@@ -69,6 +69,52 @@ def _touch(tenant_id, path):
     route = "/" + "/".join(path.split("/")[:2])   # e.g. /v1/stt
     a["paths"][route] = a["paths"].get(route, 0) + 1
 
+# --- precise traffic metrics: counts, latency, failures (in-memory; resets on restart) ---
+_metrics = {"requests": 0, "errors": 0, "lat_ms": [], "by_tenant": {}, "since": time.time()}
+_recent_errors = []       # newest-first ring of the last 50 failures
+_voice = {"sessions": 0, "active": 0, "turns": 0, "first_audio_ms": []}   # live voice sessions
+
+def _rec_request(tenant_id, path, status, ms, error=""):
+    _metrics["requests"] += 1
+    _metrics["lat_ms"].append(ms)
+    if len(_metrics["lat_ms"]) > 2000:
+        _metrics["lat_ms"] = _metrics["lat_ms"][-1000:]
+    t = _metrics["by_tenant"].setdefault(tenant_id, {"requests": 0, "errors": 0, "lat_ms": []})
+    t["requests"] += 1
+    t["lat_ms"].append(ms)
+    if len(t["lat_ms"]) > 500:
+        t["lat_ms"] = t["lat_ms"][-250:]
+    if status >= 400:
+        _metrics["errors"] += 1; t["errors"] += 1
+        _recent_errors.insert(0, {"ts": int(time.time()), "tenant": tenant_id, "path": "/" + path,
+                                  "status": status, "detail": (error or "")[:200]})
+        del _recent_errors[50:]
+
+def _lat_stats(vals):
+    if not vals:
+        return {"avg_ms": None, "p95_ms": None}
+    s = sorted(vals)
+    return {"avg_ms": round(sum(s) / len(s)), "p95_ms": s[min(len(s) - 1, int(len(s) * 0.95))]}
+
+# --- emergency kill-switch (persisted in Postgres so it survives restarts) ---
+_service_enabled = True
+
+async def _settings_table():
+    pool = await db()
+    await pool.execute("CREATE TABLE IF NOT EXISTS settings (key text PRIMARY KEY, value text)")
+    return pool
+
+@app.on_event("startup")
+async def _load_service_state():
+    global _service_enabled
+    try:
+        pool = await _settings_table()
+        row = await pool.fetchrow("SELECT value FROM settings WHERE key='service_enabled'")
+        if row:
+            _service_enabled = row["value"] == "1"
+    except Exception:
+        pass   # DB not up yet -> default enabled; toggle still works once it is
+
 async def authenticate(request: Request) -> dict:
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
@@ -89,6 +135,64 @@ async def authenticate(request: Request) -> dict:
 @app.get("/health")
 def health():
     return {"ok": True, "service": "api-gateway"}
+
+@app.get("/v1/service_state")
+def service_state():
+    """Public flag: is the service accepting traffic? The websocket-gateway checks this on every
+    new voice session; integrations can use it for their status dot too."""
+    return {"enabled": _service_enabled}
+
+@app.post("/admin/service")
+async def set_service(request: Request, body: dict):
+    """Emergency kill-switch. enabled=false -> REST returns 503 and new voice sessions are refused."""
+    check_admin(request)
+    global _service_enabled
+    _service_enabled = bool(body.get("enabled", True))
+    try:
+        pool = await _settings_table()
+        await pool.execute(
+            "INSERT INTO settings (key, value) VALUES ('service_enabled', $1) "
+            "ON CONFLICT (key) DO UPDATE SET value=$1", "1" if _service_enabled else "0")
+    except Exception:
+        pass
+    return {"enabled": _service_enabled}
+
+@app.get("/admin/metrics")
+async def metrics(request: Request):
+    """Precise traffic numbers for the admin panel: request counts, latency, failures, voice sessions."""
+    check_admin(request)
+    tenants = [{"tenant_id": t, "requests": v["requests"], "errors": v["errors"],
+                **_lat_stats(v["lat_ms"])}
+               for t, v in sorted(_metrics["by_tenant"].items(),
+                                  key=lambda kv: -kv[1]["requests"])]
+    return {"enabled": _service_enabled,
+            "since": int(_metrics["since"]),
+            "requests": _metrics["requests"], "errors": _metrics["errors"],
+            **_lat_stats(_metrics["lat_ms"]),
+            "voice": {"sessions": _voice["sessions"], "active": _voice["active"],
+                      "turns": _voice["turns"],
+                      "first_audio": _lat_stats(_voice["first_audio_ms"])},
+            "by_tenant": tenants, "recent_errors": _recent_errors}
+
+@app.post("/internal/voice")
+async def internal_voice(request: Request, body: dict):
+    """Called by the websocket-gateway (internal key) to report voice sessions:
+    {event:'start'} on connect; {event:'end', turns, first_audio_ms:[...]} on disconnect."""
+    auth = request.headers.get("authorization", "")
+    if auth.removeprefix("Bearer ").strip() != os.getenv("DEV_API_KEY", "dev-test-key"):
+        raise HTTPException(401, "internal only")
+    if body.get("event") == "start":
+        _voice["sessions"] += 1; _voice["active"] += 1
+        _touch("voice-session", "v1/agent/stream")
+    elif body.get("event") == "end":
+        _voice["active"] = max(0, _voice["active"] - 1)
+        _voice["turns"] += int(body.get("turns", 0))
+        for ms in (body.get("first_audio_ms") or [])[:50]:
+            if isinstance(ms, (int, float)):
+                _voice["first_audio_ms"].append(int(ms))
+        if len(_voice["first_audio_ms"]) > 1000:
+            _voice["first_audio_ms"] = _voice["first_audio_ms"][-500:]
+    return {"ok": True}
 
 @app.get("/admin/activity")
 async def activity(request: Request):
@@ -175,11 +279,14 @@ async def status(request: Request):
                 key_valid = bool(row)
             except Exception:
                 key_valid = None
-    return {"ok": all(v == "up" for v in components.values()), "service": "voice-ai",
+    return {"ok": _service_enabled and all(v == "up" for v in components.values()),
+            "service": "voice-ai", "enabled": _service_enabled,
             "components": components, "api_key_valid": key_valid, "time": int(time.time())}
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 async def proxy(path: str, request: Request):
+    if not _service_enabled:
+        raise HTTPException(503, "Service disabled by admin")
     tenant = await authenticate(request)
     _touch(tenant["tenant_id"], path)   # record for the live connection view
     target = None
@@ -189,6 +296,7 @@ async def proxy(path: str, request: Request):
             break
     if not target:
         raise HTTPException(404, f"No route for /{path}")
+    t0 = time.time()
     async with httpx.AsyncClient(timeout=120) as client:
         body = await request.body()
         headers = dict(request.headers)
@@ -197,9 +305,16 @@ async def proxy(path: str, request: Request):
         # internal services with the trusted internal key so they accept the proxied request.
         headers["authorization"] = f"Bearer {os.getenv('DEV_API_KEY', 'dev-test-key')}"
         headers["x-tenant-id"] = tenant["tenant_id"]
-        r = await client.request(request.method, f"{target}/{path}",
-                                 content=body, headers=headers,
-                                 params=dict(request.query_params))
+        try:
+            r = await client.request(request.method, f"{target}/{path}",
+                                     content=body, headers=headers,
+                                     params=dict(request.query_params))
+        except Exception as e:
+            _rec_request(tenant["tenant_id"], path, 502, int((time.time()-t0)*1000), str(e))
+            raise HTTPException(502, f"Upstream unreachable: {e}")
+        ms = int((time.time()-t0)*1000)
+        err = r.text[:200] if r.status_code >= 400 else ""
+        _rec_request(tenant["tenant_id"], path, r.status_code, ms, err)
         return Response(content=r.content, status_code=r.status_code,
                         media_type=r.headers.get("content-type"))
 

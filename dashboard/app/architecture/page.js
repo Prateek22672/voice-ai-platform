@@ -148,12 +148,12 @@ export default function ArchitecturePage() {
     },
     {
       name: 'Speech-to-Text',
-      tech: 'faster-whisper (self-hosted) · OpenAI gpt-4o-transcribe (swappable)',
-      role: 'Turns your speech into text the brain can read.',
-      runs: 'Our GPU (self-hosted) or OpenAI cloud',
+      tech: 'Groq whisper-large-v3-turbo (default) · faster-whisper / OpenAI (swappable)',
+      role: 'Turns your speech into text the brain can read — wrapped in our own audio clean-up, domain biasing and confidence-based gibberish rejection.',
+      runs: 'Groq cloud (default) · our server or OpenAI (swappable)',
       costInr: null,
       costCustom: 'dual', // rendered specially
-      improve: 'large-v3 on a GPU for top self-hosted accuracy, or the OpenAI API for maximum accuracy with zero hardware.',
+      improve: 'Switch engines live from Insights; large-v3 on a GPU for top self-hosted accuracy, or OpenAI gpt-4o-transcribe for maximum accuracy with zero hardware.',
     },
     {
       name: 'The Brain (LLM)',
@@ -266,6 +266,33 @@ export default function ArchitecturePage() {
       cost: 'Scales with call volume',
       fit: 'Low or spiky traffic',
       tone: 'muted',
+    },
+  ];
+
+  const accuracyStages = [
+    {
+      step: '1 · Clean the audio',
+      when: 'Before STT',
+      tone: 'green',
+      desc: 'Every mic frame is DC-offset corrected, high-pass filtered to remove <80Hz rumble/hum, and peak-normalized to a consistent loudness. Whisper makes far fewer errors on clean, evenly-loud audio.',
+    },
+    {
+      step: '2 · Bias for the domain',
+      when: 'During STT',
+      tone: 'muted',
+      desc: 'A domain prompt (e.g. “a software-engineering job interview”) primes Whisper toward the right vocabulary, so names and technical terms are transcribed correctly instead of guessed.',
+    },
+    {
+      step: '3 · Reject gibberish by confidence',
+      when: 'During STT',
+      tone: 'amber',
+      desc: "We read Whisper's own confidence signals — average log-probability, no-speech probability, compression ratio. Low-confidence or noise-like results are dropped, so the model never invents a sentence from mumbling or background noise.",
+    },
+    {
+      step: '4 · Clean the text',
+      when: 'After STT',
+      tone: 'muted',
+      desc: 'Known hallucination phrases (“thank you for watching”, a stray “you.”) are stripped, and runaway word-repetition is collapsed.',
     },
   ];
 
@@ -437,6 +464,45 @@ export default function ArchitecturePage() {
               </p>
             </Card>
           </div>
+        </section>
+
+        {/* ===================== ACCURACY & ROBUSTNESS ===================== */}
+        <section className="mb-20" aria-labelledby="accuracy-title">
+          <SectionHeading
+            kicker="Accuracy & robustness"
+            title={<span id="accuracy-title">Keeping transcription clean — our own pipeline</span>}
+            intro="Beyond the STT model, we wrap every utterance in our own audio + text processing so the agent hears you correctly and never invents words from noise."
+          />
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {accuracyStages.map((s) => (
+              <Card key={s.step}>
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                  <h3 className="text-lg font-semibold text-white">{s.step}</h3>
+                  <Tag tone={s.tone}>{s.when}</Tag>
+                </div>
+                <p className="text-sm leading-relaxed text-white/60">{s.desc}</p>
+              </Card>
+            ))}
+          </div>
+
+          {/* gibberish handling callout */}
+          <Card className="mt-4 border-[#3fb950]/30 bg-[#3fb950]/[0.05]">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#3fb950]">
+              How we handle gibberish
+            </p>
+            <p className="mt-2 text-lg text-white/80">
+              Noise is dropped silently. Speech we can&rsquo;t understand triggers a gentle,{' '}
+              <strong className="text-white">escalating re-prompt</strong> — &ldquo;Sorry, I
+              didn&rsquo;t catch that, could you repeat?&rdquo; — never a wrong answer.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-white/60">
+              The core rule: uncertain text{' '}
+              <strong className="text-white">never reaches the LLM</strong>, so the agent
+              can&rsquo;t confidently respond to nonsense. The re-prompt escalates (repeat →
+              speak louder → check your mic) and resets the instant you&rsquo;re understood.
+            </p>
+          </Card>
         </section>
 
         {/* ============================ PART 2 ============================ */}

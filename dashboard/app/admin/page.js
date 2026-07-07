@@ -49,6 +49,8 @@ export default function AdminPage() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState('');
   const [activity, setActivity] = useState([]); // live connected clients
+  const [metrics, setMetrics] = useState(null); // traffic: requests, latency, errors, voice sessions
+  const [toggling, setToggling] = useState(false);
 
   const adminFetch = useCallback(
     (path, opts = {}, password) =>
@@ -91,13 +93,46 @@ export default function AdminPage() {
     [adminFetch]
   );
 
-  // poll live connections every 4s while unlocked
+  const loadMetrics = useCallback(
+    async (password) => {
+      try {
+        const r = await adminFetch('/admin/metrics', {}, password);
+        if (!r.ok) return;
+        setMetrics(await r.json());
+      } catch {
+        /* ignore */
+      }
+    },
+    [adminFetch]
+  );
+
+  // poll live connections + traffic metrics every 4s while unlocked
   useEffect(() => {
     if (!unlocked) return;
     loadActivity();
-    const id = setInterval(loadActivity, 4000);
+    loadMetrics();
+    const id = setInterval(() => {
+      loadActivity();
+      loadMetrics();
+    }, 4000);
     return () => clearInterval(id);
-  }, [unlocked, loadActivity]);
+  }, [unlocked, loadActivity, loadMetrics]);
+
+  async function toggleService() {
+    if (!metrics) return;
+    const next = !metrics.enabled;
+    if (!next && !confirm('EMERGENCY STOP: disable the service? All API calls return 503 and new voice sessions are refused until you re-enable it.')) return;
+    setToggling(true);
+    try {
+      const r = await adminFetch('/admin/service', {
+        method: 'POST',
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (r.ok) loadMetrics();
+    } finally {
+      setToggling(false);
+    }
+  }
 
   // try a saved password on mount
   useEffect(() => {
@@ -236,6 +271,115 @@ export default function AdminPage() {
         </div>
         <Btn variant="ghost" onClick={lock}>Lock</Btn>
       </div>
+
+      {/* service control — emergency kill-switch */}
+      <Card className={`mb-6 ${metrics && !metrics.enabled ? 'border-[#e5484d]/50 bg-[#e5484d]/[0.06]' : 'border-[#3fb950]/30'}`}>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="relative flex h-3 w-3">
+              {metrics?.enabled ? (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#3fb950]/50" />
+              ) : null}
+              <span className={`relative inline-flex h-3 w-3 rounded-full ${metrics ? (metrics.enabled ? 'bg-[#3fb950]' : 'bg-[#e5484d]') : 'bg-white/25'}`} />
+            </span>
+            <div>
+              <h2 className="text-sm font-semibold text-white">
+                Service is {metrics ? (metrics.enabled ? 'LIVE' : 'DISABLED') : '…'}
+              </h2>
+              <p className="text-xs text-white/50">
+                {metrics?.enabled
+                  ? 'Accepting API calls and voice sessions.'
+                  : 'All API calls return 503; new voice sessions are refused.'}
+              </p>
+            </div>
+          </div>
+          <Btn
+            variant={metrics?.enabled ? 'danger' : 'primary'}
+            onClick={toggleService}
+            disabled={toggling || !metrics}
+          >
+            {toggling ? 'Switching…' : metrics?.enabled ? 'Emergency stop' : 'Re-enable service'}
+          </Btn>
+        </div>
+      </Card>
+
+      {/* traffic & latency */}
+      <Card className="mb-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-white/50">Traffic · latency · failures</h2>
+          {metrics ? (
+            <span className="text-xs text-white/40">
+              since {new Date(metrics.since * 1000).toLocaleString()}
+            </span>
+          ) : null}
+        </div>
+        {!metrics ? (
+          <p className="text-sm text-white/40">Loading…</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { label: 'API requests', value: metrics.requests.toLocaleString() },
+                { label: 'Failures', value: metrics.errors.toLocaleString(), bad: metrics.errors > 0 },
+                { label: 'Avg latency', value: metrics.avg_ms != null ? `${metrics.avg_ms}ms` : '—' },
+                { label: 'p95 latency', value: metrics.p95_ms != null ? `${metrics.p95_ms}ms` : '—' },
+                { label: 'Voice sessions', value: metrics.voice.sessions.toLocaleString() },
+                { label: 'Active now', value: metrics.voice.active.toLocaleString(), live: metrics.voice.active > 0 },
+                { label: 'Agent turns', value: metrics.voice.turns.toLocaleString() },
+                { label: 'Avg response', value: metrics.voice.first_audio.avg_ms != null ? `${(metrics.voice.first_audio.avg_ms / 1000).toFixed(1)}s` : '—' },
+              ].map((s) => (
+                <div key={s.label} className="rounded-xl border border-white/10 bg-black/30 px-4 py-3">
+                  <p className={`text-xl font-semibold tabular-nums ${s.bad ? 'text-[#e5484d]' : s.live ? 'text-[#3fb950]' : 'text-white'}`}>
+                    {s.value}
+                  </p>
+                  <p className="mt-0.5 text-[11px] uppercase tracking-wide text-white/40">{s.label}</p>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs text-white/40">
+              API latency = gateway → service round-trip. Avg response = user finishes speaking → first agent audio.
+              Counters reset when the gateway restarts.
+            </p>
+          </>
+        )}
+      </Card>
+
+      {/* recent failures */}
+      {metrics?.recent_errors?.length ? (
+        <Card className="mb-6 border-[#e5484d]/25">
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-[#e5484d]">
+            Recent failures (last {metrics.recent_errors.length})
+          </h2>
+          <div className="max-h-64 overflow-y-auto overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-white/40">
+                  <th scope="col" className="px-3 py-2 font-medium">Time</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Tenant</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Path</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Status</th>
+                  <th scope="col" className="px-3 py-2 font-medium">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.recent_errors.map((e, i) => (
+                  <tr key={i} className="border-b border-white/5 last:border-0">
+                    <td className="px-3 py-2 whitespace-nowrap tabular-nums text-white/60">
+                      {new Date(e.ts * 1000).toLocaleTimeString()}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-white/70">{e.tenant}</td>
+                    <td className="px-3 py-2 font-mono text-white/70">{e.path}</td>
+                    <td className="px-3 py-2 tabular-nums text-[#e5484d]">{e.status}</td>
+                    <td className="max-w-[240px] truncate px-3 py-2 text-white/50" title={e.detail}>
+                      {e.detail || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ) : null}
 
       {/* live connections */}
       <Card className="mb-6">

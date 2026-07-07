@@ -12,7 +12,66 @@ from llm_router import stream_completion
 from memory import ConversationMemory
 
 app = FastAPI(title="conversation-service", version="1.0.0")
+
+# CORS so the dashboard can read /v1/usage_llm directly (same pattern as stt-service).
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+                   allow_headers=["*"], allow_credentials=False)
+
 _mem = None
+
+# ---- LLM billing rates: USD per 1M tokens (input, output) — provider list prices ----
+LLM_RATES_PER_MTOK = {
+    "llama-3.3-70b-versatile": (0.59, 0.79),   # Groq
+    "llama-3.1-8b-instant":    (0.05, 0.08),   # Groq
+    "gpt-4o-mini":             (0.15, 0.60),   # OpenAI
+    "gpt-4o":                  (2.50, 10.00),  # OpenAI
+}
+
+def _llm_rate(model: str):
+    for key, rate in LLM_RATES_PER_MTOK.items():
+        if model.endswith(key) or key in model:
+            return rate
+    return (0.59, 0.79)   # unknown -> assume Groq 70B so we never under-report
+
+@app.get("/v1/usage_llm")
+def usage_llm():
+    """Real LLM usage for the Insights page: every call + its token counts are logged by
+    llm_router; cost = measured tokens x official list price."""
+    import json as _json
+    path = os.path.join(os.getenv("VOICE_DIR", "."), "llm_usage.json")
+    try:
+        data = _json.load(open(path)) if os.path.exists(path) else {}
+    except Exception:
+        data = {}
+    total_cost, total_calls, total_p, total_c, est_calls, by = 0.0, 0, 0, 0, 0, []
+    for model, v in data.items():
+        rin, rout = _llm_rate(model)
+        cost = v.get("prompt_tokens", 0) / 1e6 * rin + v.get("completion_tokens", 0) / 1e6 * rout
+        total_cost += cost
+        total_calls += v.get("calls", 0)
+        total_p += v.get("prompt_tokens", 0)
+        total_c += v.get("completion_tokens", 0)
+        est_calls += v.get("estimated_calls", 0)
+        by.append({"model": model, "calls": v.get("calls", 0),
+                   "prompt_tokens": v.get("prompt_tokens", 0),
+                   "completion_tokens": v.get("completion_tokens", 0),
+                   "estimated_calls": v.get("estimated_calls", 0),
+                   "cost_usd": round(cost, 5)})
+    return {"total_calls": total_calls, "prompt_tokens": total_p, "completion_tokens": total_c,
+            "estimated_calls": est_calls, "est_cost_usd": round(total_cost, 5),
+            "usd_inr": 85, "est_cost_inr": round(total_cost * 85, 3),
+            "model": os.getenv("LLM_MODEL", ""), "by_model": by}
+
+@app.post("/v1/usage_llm/reset")
+def usage_llm_reset(tenant=Depends(verify_api_key)):
+    path = os.path.join(os.getenv("VOICE_DIR", "."), "llm_usage.json")
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+    return {"reset": True}
 
 def mem() -> ConversationMemory:
     global _mem
@@ -30,6 +89,11 @@ async def create_session(body: dict, tenant=Depends(verify_api_key)):
     system = body.get("system_prompt",
         "You are a helpful voice assistant. Keep replies short and conversational — "
         "1-3 sentences. You are speaking aloud, so no markdown, no lists.")
+    # Latency trick: the FIRST sentence gates time-to-first-audio (it must be fully synthesized
+    # before the caller hears anything). A short opener = the agent starts speaking sooner.
+    if os.getenv("LLM_STYLE_HINT", "1") == "1":
+        system += (" Important speaking style: open every reply with a very short first "
+                   "sentence (under 8 words), then continue naturally.")
     await mem().init_session(sid, system)
     return {"session_id": sid}
 

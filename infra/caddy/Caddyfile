@@ -7,6 +7,9 @@
 	handle /v1/usage_stt* {
 		reverse_proxy stt-service:8001
 	}
+	handle /v1/usage_llm* {
+		reverse_proxy conversation-service:8003
+	}
 	handle /v1/stt/backend* {
 		reverse_proxy stt-service:8001
 	}
@@ -20,6 +23,12 @@
 		reverse_proxy api-gateway:8080
 	}
 	handle /admin/activity* {
+		reverse_proxy api-gateway:8080
+	}
+	handle /admin/metrics* {
+		reverse_proxy api-gateway:8080
+	}
+	handle /admin/service* {
 		reverse_proxy api-gateway:8080
 	}
 	handle /v1/* {

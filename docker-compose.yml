@@ -93,7 +93,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+      VOICE_DIR: /app/voices                       # persists llm_usage.json across rebuilds
     ports: ["8003:8003"]
+    volumes: [ "./voices:/app/voices" ]
     depends_on: [redis]
 
   websocket-gateway:

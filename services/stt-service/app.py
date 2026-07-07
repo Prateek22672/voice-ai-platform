@@ -99,15 +99,58 @@ def _pcm_to_wav(audio_f32, sr=16000):
 
 _key_rr = {}   # backend -> round-robin index
 
+# One pooled HTTP client with keep-alive: reusing the TLS connection to Groq/OpenAI saves
+# a fresh handshake (~100-300ms) on EVERY transcription call.
+_http_client = None
+def _http():
+    global _http_client
+    if _http_client is None:
+        import httpx
+        _http_client = httpx.Client(timeout=30,
+                                    limits=httpx.Limits(max_keepalive_connections=4,
+                                                        keepalive_expiry=60))
+    return _http_client
+
 def _keys_for(env_name):
     """Support ONE key or a comma-separated list of keys (for rotation across free tiers)."""
     return [k.strip() for k in os.getenv(env_name, "").split(",") if k.strip()]
 
+def _confident(segments):
+    """True only if the transcription looks like REAL speech, not a gibberish/noise
+    hallucination. Uses Whisper's own per-segment scores (returned in verbose_json):
+      - avg_logprob : how sure the model is (near 0 = sure; very negative = guessing)
+      - no_speech_prob : chance the audio is actually silence/noise
+      - compression_ratio : high = repetitive/invented text
+    Each check ONLY applies when that field is actually present, so a backend that omits a
+    score never causes a false drop. Thresholds are env-tunable (no redeploy needed)."""
+    def _num(vals):  # keep only numeric values that are present
+        return [v for v in vals if isinstance(v, (int, float))]
+    min_lp = float(os.getenv("STT_MIN_AVG_LOGPROB", "-0.85"))
+    max_ns = float(os.getenv("STT_MAX_NO_SPEECH", "0.6"))
+    max_cr = float(os.getenv("STT_MAX_COMPRESSION", "2.5"))
+    lp_pairs = [(s.get("avg_logprob"), max(1, len(s.get("text") or "")))
+                for s in segments if isinstance(s.get("avg_logprob"), (int, float))]
+    nss = _num(s.get("no_speech_prob") for s in segments)
+    crs = _num(s.get("compression_ratio") for s in segments)
+    if lp_pairs:
+        tot = sum(w for _, w in lp_pairs)
+        avg_lp = sum(v * w for v, w in lp_pairs) / max(1, tot)
+        if avg_lp < min_lp:
+            print(f"[stt] dropped low-confidence utterance (avg_logprob={avg_lp:.2f} < {min_lp})", flush=True)
+            return False
+    if nss and max(nss) > max_ns:
+        print(f"[stt] dropped noise utterance (no_speech_prob={max(nss):.2f} > {max_ns})", flush=True)
+        return False
+    if crs and max(crs) > max_cr:
+        print(f"[stt] dropped repetitive utterance (compression_ratio={max(crs):.2f} > {max_cr})", flush=True)
+        return False
+    return True
+
 def cloud_transcribe(audio_f32, backend):
     """Send one utterance to a cloud transcription API (OpenAI or Groq — same API shape).
-    Groq's Whisper is ~3x cheaper than OpenAI and runs on their fast LPU. Supports MULTIPLE keys:
-    set GROQ_API_KEY=key1,key2,key3 — we round-robin, and fail over to the next key on a 429
-    (rate limit) so free-tier caps don't stall an interview."""
+    We request verbose_json so we get confidence scores and can REJECT gibberish/noise instead of
+    inventing a sentence. Groq's Whisper runs on their fast LPU. Supports MULTIPLE keys:
+    set GROQ_API_KEY=key1,key2 — we round-robin and fail over to the next key on a 429."""
     import httpx
     cfg = CLOUD_STT[backend]
     keys = _keys_for(cfg["key"])
@@ -115,7 +158,8 @@ def cloud_transcribe(audio_f32, backend):
         return ""
     model = os.getenv(cfg["model_env"], cfg["model_default"])
     wav = _pcm_to_wav(audio_f32)
-    req_data = {"model": model, "response_format": "text", "language": os.getenv("STT_LANG") or "en"}
+    req_data = {"model": model, "response_format": "verbose_json",
+                "language": os.getenv("STT_LANG") or "en", "temperature": 0}
     prompt = os.getenv("STT_PROMPT", "").strip()      # domain vocabulary hint (e.g. interview terms)
     if prompt:
         req_data["prompt"] = prompt
@@ -124,14 +168,22 @@ def cloud_transcribe(audio_f32, backend):
     for i in range(len(keys)):                          # try each key until one works
         key = keys[(start + i) % len(keys)]
         try:
-            r = httpx.post(cfg["url"], headers={"Authorization": f"Bearer {key}"},
-                           files={"file": ("audio.wav", wav, "audio/wav")},
-                           data=req_data, timeout=30)
+            r = _http().post(cfg["url"], headers={"Authorization": f"Bearer {key}"},
+                             files={"file": ("audio.wav", wav, "audio/wav")},
+                             data=req_data)
             if r.status_code == 429:                     # rate limited -> try the next key
                 continue
             r.raise_for_status()
             _record_usage(model, len(audio_f32) / 16000.0)
-            return r.text.strip()
+            try:
+                j = r.json()
+            except Exception:
+                return r.text.strip()                    # non-JSON (shouldn't happen) -> accept text
+            text = (j.get("text") or "").strip()
+            segs = j.get("segments") or []
+            if segs and not _confident(segs):
+                return ""                                # gibberish / low-confidence -> no sentence
+            return text
         except Exception:
             continue
     return ""   # every key failed / rate-limited
@@ -302,6 +354,9 @@ async def stream_transcribe(ws: WebSocket):
     dump_dir = os.getenv("VOICE_DIR", "./voices")
     PREROLL = int(SR * 0.3)          # keep 300ms before speech so the first word isn't clipped
     MIN_SPEECH_S = float(os.getenv("STT_MIN_SPEECH_S", "0.45"))  # ignore blips shorter than this
+    # If the user clearly spoke (>= this) but we got NOTHING intelligible, it's mumble/gibberish/
+    # cross-talk — the gateway should gently ask them to repeat. Below it, we stay silent (noise).
+    UNCLEAR_MIN_SPEECH_S = float(os.getenv("STT_UNCLEAR_MIN_SPEECH_S", "0.7"))
     preroll = np.zeros(0, dtype=np.float32)
     in_utt = False
     speech_dur = 0.0                 # seconds of ACTUAL speech in the current utterance
@@ -316,10 +371,11 @@ async def stream_transcribe(ws: WebSocket):
         except Exception:
             pass
 
-    async def transcribe_and_send(final: bool):
+    async def transcribe_and_send(final: bool, had_speech: bool = False):
         """Runs the (blocking) model in a thread so the receive loop keeps flowing.
         final=False emits a live 'partial' (text so far, buffer kept); final=True emits
-        'final' and clears the buffer (end of the user's turn)."""
+        'final' and clears the buffer (end of the user's turn). If a final turn had real speech
+        but produced no intelligible text, emit 'unclear' so the gateway can ask them to repeat."""
         nonlocal buf
         if len(buf) < SR // 4:  # <250ms — nothing meaningful yet
             if final:
@@ -334,6 +390,11 @@ async def stream_transcribe(ws: WebSocket):
             await ws.send_text(json.dumps({
                 "type": "final" if final else "partial",
                 "text": text, "latency_ms": int((time.time()-t0)*1000)}))
+        elif final and had_speech:
+            # they clearly spoke but nothing intelligible came back (mumble / gibberish / cross-talk).
+            # Signal the gateway to gently re-prompt — WITHOUT inventing a sentence. Pure noise
+            # (had_speech=False) is dropped silently instead.
+            await ws.send_text(json.dumps({"type": "unclear"}))
         if final:
             buf = np.zeros(0, dtype=np.float32)
 
@@ -345,7 +406,8 @@ async def stream_transcribe(ws: WebSocket):
             if "text" in msg and msg["text"]:
                 ev = json.loads(msg["text"])
                 if ev.get("event") == "flush":
-                    await transcribe_and_send(final=True); in_utt = False; last_partial = 0.0; speech_dur = 0.0
+                    await transcribe_and_send(final=True, had_speech=(speech_dur >= UNCLEAR_MIN_SPEECH_S))
+                    in_utt = False; last_partial = 0.0; speech_dur = 0.0
                 elif ev.get("event") == "reset":
                     # discard whatever is buffered (echo/noise captured during the agent's turn)
                     buf = np.zeros(0, dtype=np.float32); in_utt = False; last_partial = 0.0; speech_dur = 0.0
@@ -380,7 +442,7 @@ async def stream_transcribe(ws: WebSocket):
                 buf = np.concatenate([buf, pcm])
                 if (now - last_speech) > SILENCE_FLUSH_S:
                     if speech_dur >= MIN_SPEECH_S:
-                        await transcribe_and_send(final=True)
+                        await transcribe_and_send(final=True, had_speech=(speech_dur >= UNCLEAR_MIN_SPEECH_S))
                     else:
                         buf = np.zeros(0, dtype=np.float32)   # too little speech = noise blip, drop it
                     in_utt = False; last_partial = 0.0; speech_dur = 0.0
