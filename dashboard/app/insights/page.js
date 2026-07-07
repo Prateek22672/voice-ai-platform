@@ -31,6 +31,10 @@ export default function InsightsPage() {
   const [switchMsg, setSwitchMsg] = useState(null); // { ok: boolean, text: string }
   const [estMinutes, setEstMinutes] = useState(300);
   const [estModel, setEstModel] = useState('whisper-large-v3-turbo');
+  // phone-call estimator (matches the Calls page duration cap)
+  const [callCount, setCallCount] = useState(100);
+  const [callMin, setCallMin] = useState(5);       // current per-call cap on the Calls page
+  const [trunkRate, setTrunkRate] = useState(0.007); // $/min — set to your Telnyx rate for the destination
   const switchMsgTimer = useRef(null);
 
   const usdInr =
@@ -662,6 +666,62 @@ export default function InsightsPage() {
               </span>
             </p>
           </div>
+        </section>
+
+        {/* Phone call estimator — trunk minutes + AI, per call and per month */}
+        <section className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-xl p-6">
+          <h2 className="text-base font-semibold">Phone-call cost estimator</h2>
+          <p className="mt-1 text-xs text-white/45">
+            Calls are capped at {callMin} min on the Calls page (auto hang-up). AI cost = STT{' '}
+            {money(0.000667)}/min + LLM ≈ {money(0.0018)}/min; TTS is self-hosted (free). Set the
+            trunk rate to your Telnyx per-minute price for the destination (see telnyx.com/pricing).
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <label className="text-xs text-white/55">
+              calls per month
+              <input
+                type="number" min="0" value={callCount}
+                onChange={(e) => setCallCount(Math.max(0, Number(e.target.value) || 0))}
+                className={`mt-1 w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white tabular-nums ${focusRing}`}
+              />
+            </label>
+            <label className="text-xs text-white/55">
+              max minutes per call (current cap: 5)
+              <input
+                type="number" min="1" max="30" value={callMin}
+                onChange={(e) => setCallMin(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+                className={`mt-1 w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white tabular-nums ${focusRing}`}
+              />
+            </label>
+            <label className="text-xs text-white/55">
+              trunk rate ($/min, Telnyx)
+              <input
+                type="number" min="0" step="0.001" value={trunkRate}
+                onChange={(e) => setTrunkRate(Math.max(0, Number(e.target.value) || 0))}
+                className={`mt-1 w-full rounded-lg border border-white/10 bg-black px-3 py-2 text-sm text-white tabular-nums ${focusRing}`}
+              />
+            </label>
+          </div>
+          {(() => {
+            const aiPerMin = 0.000667 + 0.0018; // Groq STT turbo + LLM (~450 tok/min at list price)
+            const perCall = callMin * (trunkRate + aiPerMin);
+            const monthly = callCount * perCall;
+            return (
+              <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
+                <span>
+                  Worst-case per call ({callMin} min):{' '}
+                  <span className="text-lg font-semibold tabular-nums text-white">{money(perCall)}</span>
+                </span>
+                <span>
+                  {callCount.toLocaleString()} calls/month:{' '}
+                  <span className="text-lg font-semibold tabular-nums text-white">{money(monthly)}</span>
+                </span>
+                <span className="text-xs text-white/45">
+                  of which trunk {money(callMin * trunkRate)} + AI {money(callMin * aiPerMin)} per call
+                </span>
+              </div>
+            );
+          })()}
         </section>
 
         {/* Controls */}

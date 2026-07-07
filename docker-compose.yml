@@ -160,19 +160,25 @@ services:
     profiles: [telephony]
     build: { context: ., dockerfile: services/telephony-service/Dockerfile.asterisk }
     network_mode: host          # simplest for SIP/RTP; or map 5060/udp + RTP range
+    restart: unless-stopped
     environment:
       SIP_TRUNK_USER: ${SIP_TRUNK_USER:-}
       SIP_TRUNK_PASS: ${SIP_TRUNK_PASS:-}
+      SIP_DID_NUMBER: ${SIP_DID_NUMBER:-}   # caller ID (your purchased Telnyx number)
 
   telephony-service:
     profiles: [telephony]
     build: { context: ., dockerfile: services/telephony-service/Dockerfile }
+    restart: unless-stopped
     environment:
       ARI_URL: http://host.docker.internal:8088
       GW_WS: ws://websocket-gateway:8000/v1/agent/stream
       SIP_DID_NUMBER: ${SIP_DID_NUMBER:-}
+      EXTERNAL_MEDIA_HOST: ${EXTERNAL_MEDIA_HOST:-127.0.0.1}  # asterisk (host net) -> our published RTP port
+      VOICE_DIR: /app/voices                                  # persists call transcripts
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
     extra_hosts: [ "host.docker.internal:host-gateway" ]
+    volumes: [ "./voices:/app/voices" ]
     ports: ["8004:8004", "18000-18020:18000-18020/udp"]
 
   # ---------------- monitoring profile ----------------
