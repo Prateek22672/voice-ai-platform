@@ -1,5 +1,9 @@
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y asterisk && rm -rf /var/lib/apt/lists/*
+# Ubuntu 22.04: Debian bookworm dropped the asterisk package; Ubuntu's universe repo
+# still ships Asterisk 18 (includes ARI + externalMedia, which our bridge needs).
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends asterisk ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY services/telephony-service/asterisk-config/ /etc/asterisk/
 COPY services/telephony-service/entrypoint-asterisk.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
