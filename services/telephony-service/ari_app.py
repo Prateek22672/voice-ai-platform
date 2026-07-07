@@ -152,6 +152,7 @@ class RTPBridge:
         self.seq = 0; self.ts = 0; self.ssrc = 0x56414920
         self._rs_in = None             # resample state 8k->16k (caller -> STT)
         self._rs_out = None            # resample state 24k->8k (TTS -> caller)
+        self._mic_buf = bytearray()    # batch tiny 20ms RTP frames into browser-sized chunks
 
     def _log_line(self, role: str, text: str):
         self.call.setdefault("transcript", []).append(
@@ -205,7 +206,12 @@ class RTPBridge:
                         pcm, self._rs_in = audioop.ratecv(pcm8, 2, 1, 8000, 16000, self._rs_in)
                     else:                # slin16: already PCM16 @16k
                         pcm = payload
-                    await gw.send(pcm)
+                    # batch to ~256ms chunks (8192 bytes @16k PCM16) — the same size the browser
+                    # sends. 20ms slivers are too small for the VAD, which made the agent deaf.
+                    self._mic_buf += pcm
+                    if len(self._mic_buf) >= 8192:
+                        await gw.send(bytes(self._mic_buf))
+                        self._mic_buf.clear()
 
             async def ws_out():
                 async for msg in gw:
