@@ -225,11 +225,14 @@ async def ari_events():
                     ev = json.loads(raw)
                     if ev.get("type") == "StasisStart":
                         asyncio.create_task(handle_stasis(ev, port_counter))
-                    elif ev.get("type") == "StasisEnd":
+                    elif ev.get("type") in ("StasisEnd", "ChannelDestroyed", "ChannelHangupRequest"):
+                        # any hangup path (callee hung up, declined, network drop) -> end + persist
                         for cid, c in CALLS.items():
-                            if c.get("channel_id") == ev["channel"]["id"]:
+                            if c.get("channel_id") == ev["channel"]["id"] and c.get("status") != "ended":
                                 c["status"] = "ended"
                                 c["duration_s"] = int(time.time() - c["started"])
+                                if ev.get("cause_txt"):
+                                    c["ended_reason"] = ev["cause_txt"]
                                 stop_ev = c.get("_stop")
                                 if stop_ev:
                                     stop_ev.set()          # tear down the RTP bridge promptly
@@ -240,6 +243,14 @@ async def ari_events():
 
 async def handle_stasis(ev, port_counter):
     ch = ev["channel"]; args = ev.get("args", [])
+    name = ch.get("name", "")
+    # CRITICAL: our own externalMedia leg ALSO enters the Stasis app when created. Without this
+    # filter it was treated as a new "inbound" call -> ghost call entries, a second bridge
+    # stealing the RTP (silent calls), and a call that never ends.
+    if name.startswith("UnicastRTP"):
+        return
+    if not args and not name.startswith("PJSIP"):
+        return   # only real trunk channels (outbound originations carry args; inbound = PJSIP/...)
     call_id = args[0] if args else str(uuid.uuid4())
     call = CALLS.setdefault(call_id, {"status": "ringing", "channel_id": ch["id"],
                                       "agent_prompt": "", "started": time.time(),
