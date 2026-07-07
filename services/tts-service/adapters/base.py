@@ -25,4 +25,6 @@ def load_adapter(backend: str) -> "TTSAdapter":
         from adapters.xtts_adapter import XTTSAdapter; return XTTSAdapter()
     if backend == "espeak":
         from adapters.espeak_adapter import EspeakAdapter; return EspeakAdapter()
+    if backend == "elevenlabs":
+        from adapters.elevenlabs_adapter import ElevenLabsAdapter; return ElevenLabsAdapter()
     raise ValueError(f"Unknown TTS_BACKEND: {backend}")

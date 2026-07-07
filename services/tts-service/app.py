@@ -41,6 +41,16 @@ VOICE_CATALOG = [
     {"id": "bm_fable",    "name": "Fable",    "accent": "British",  "gender": "Male",   "grade": "C",  "tag": "Storyteller"},
     {"id": "bm_lewis",    "name": "Lewis",    "accent": "British",  "gender": "Male",   "grade": "C+", "tag": "Deep, resonant"},
     {"id": "bm_daniel",   "name": "Daniel",   "accent": "British",  "gender": "Male",   "grade": "C",  "tag": "Polished"},
+    # more American voices (variety)
+    {"id": "af_alloy",    "name": "Alloy",    "accent": "American", "gender": "Female", "grade": "C",  "tag": "Balanced, modern"},
+    {"id": "af_jessica",  "name": "Jessica",  "accent": "American", "gender": "Female", "grade": "D",  "tag": "Casual, relaxed"},
+    {"id": "af_river",    "name": "River",    "accent": "American", "gender": "Female", "grade": "D",  "tag": "Soft-spoken"},
+    {"id": "am_liam",     "name": "Liam",     "accent": "American", "gender": "Male",   "grade": "D",  "tag": "Casual, friendly"},
+    # Hindi / Indian voices — speak Hindi and Hinglish naturally (set the call language accordingly)
+    {"id": "hf_alpha",    "name": "Priya",    "accent": "Hindi",    "gender": "Female", "grade": "C",  "tag": "Warm Hindi/Hinglish",              "featured": True},
+    {"id": "hf_beta",     "name": "Ananya",   "accent": "Hindi",    "gender": "Female", "grade": "C",  "tag": "Clear Hindi/Hinglish"},
+    {"id": "hm_omega",    "name": "Arjun",    "accent": "Hindi",    "gender": "Male",   "grade": "C",  "tag": "Steady Hindi/Hinglish",            "featured": True},
+    {"id": "hm_psi",      "name": "Rohan",    "accent": "Hindi",    "gender": "Male",   "grade": "C",  "tag": "Energetic Hindi/Hinglish"},
 ]
 VALID_VOICE_IDS = {v["id"] for v in VOICE_CATALOG}
 

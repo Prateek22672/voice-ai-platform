@@ -10,6 +10,7 @@ const SAMPLES = [
   "Hi there — thanks for joining today. Let's start with a quick question about your experience.",
   "Your appointment is confirmed for tomorrow at 3 PM. Is there anything else I can help you with?",
   "Absolutely, I can walk you through that. It only takes a couple of minutes to set up.",
+  'नमस्ते! मैं आपकी क्या मदद कर सकती हूँ? आपका appointment कल 3 बजे confirm हो गया है।',
 ];
 
 const GRADE_COLOR = (g) =>
@@ -185,7 +186,7 @@ export default function VoiceStudio() {
             </button>
           ))}
           <span className="ml-auto flex flex-wrap items-center gap-2">
-            <Segmented options={['All', 'American', 'British']} value={accent} onChange={setAccent} />
+            <Segmented options={['All', 'American', 'British', 'Hindi']} value={accent} onChange={setAccent} />
             <Segmented options={['All', 'Female', 'Male']} value={gender} onChange={setGender} />
           </span>
         </div>

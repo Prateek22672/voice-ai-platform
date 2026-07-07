@@ -152,8 +152,9 @@ class RTPBridge:
         self.pt = None                 # RTP payload type — mirrored from asterisk's own packets
         self.seq = 0; self.ts = 0; self.ssrc = 0x56414920
         self._rs_in = None             # resample state 8k->16k (caller -> STT)
-        self._rs_out = None            # resample state 24k->8k (TTS -> caller)
+        self._rs_out = None            # resample state TTS-rate->8k (TTS -> caller)
         self._mic_buf = bytearray()    # batch tiny 20ms RTP frames into browser-sized chunks
+        self.tts_rate = 24000          # updated from the gateway's audio_done events
 
     def _log_line(self, role: str, text: str):
         self.call.setdefault("transcript", []).append(
@@ -225,14 +226,14 @@ class RTPBridge:
                                   f"({len(msg)} bytes) -> remote={self.remote}", flush=True)
                         tx_count[0] += 1
                         if self.pt == 8:
-                            # 24k TTS PCM -> 8k -> alaw (same codec as the phone leg: asterisk
-                            # relays it untouched — its own transcoder was eating our audio)
-                            pcm8k, self._rs_out = audioop.ratecv(msg, 2, 1, 24000, 8000, self._rs_out)
+                            # TTS PCM (rate from audio_done) -> 8k -> alaw (same codec as the
+                            # phone leg: asterisk relays untouched — its transcoder ate our audio)
+                            pcm8k, self._rs_out = audioop.ratecv(msg, 2, 1, self.tts_rate, 8000, self._rs_out)
                             out = audioop.lin2alaw(pcm8k, 2)
                             step, ts_step = 160, 160          # 20ms alaw @8k
                         else:
-                            # slin16 fallback: 24k -> 16k PCM
-                            out, self._rs_out = audioop.ratecv(msg, 2, 1, 24000, 16000, self._rs_out)
+                            # slin16 fallback: TTS rate -> 16k PCM
+                            out, self._rs_out = audioop.ratecv(msg, 2, 1, self.tts_rate, 16000, self._rs_out)
                             step, ts_step = 640, 320          # 20ms PCM16 @16k
                         for i in range(0, len(out), step):
                             chunk = out[i:i+step]
@@ -252,6 +253,8 @@ class RTPBridge:
                             self._log_line("caller", d["text"])
                         elif d.get("type") == "agent_text" and d.get("text"):
                             self._log_line("agent", d["text"])
+                        elif d.get("type") == "audio_done" and d.get("sample_rate"):
+                            self.tts_rate = int(d["sample_rate"])   # backend-agnostic pitch
 
             await asyncio.gather(rtp_in(), ws_out(), return_exceptions=True)
             print(f"[bridge:{self.rtp_port}] done — rtp packets in={rx_count[0]} "

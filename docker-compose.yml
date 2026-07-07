@@ -77,6 +77,9 @@ services:
       TTS_BACKEND: ${TTS_BACKEND:-espeak}     # espeak=plumbing test; kokoro/f5tts=real quality
       KOKORO_SPEED: ${KOKORO_SPEED:-0.9}      # <1.0 = slower/calmer voice
       KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}   # premium tier: TTS_BACKEND=elevenlabs
+      ELEVEN_MODEL: ${ELEVEN_MODEL:-eleven_turbo_v2_5}
+      ELEVEN_VOICE: ${ELEVEN_VOICE:-21m00Tcm4TlvDq8ikWAM}
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}   # guards "set live agent voice" in Voice Studio
     ports: ["8002:8002"]

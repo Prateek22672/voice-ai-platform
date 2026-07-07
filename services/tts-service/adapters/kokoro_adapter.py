@@ -17,9 +17,9 @@ class KokoroAdapter(TTSAdapter):
         self._pipes = {self.default_lang: KPipeline(lang_code=self.default_lang)}
 
     def _pipe_for(self, voice):
-        # Voice id's first letter encodes accent: 'a' American, 'b' British. Match the
-        # phonemizer to it so British voices are pronounced British, not American.
-        lang = voice[0] if voice and voice[0] in ("a", "b") else self.default_lang
+        # Voice id's first letter encodes the language/accent: 'a' American, 'b' British,
+        # 'h' Hindi (espeak-ng G2P). Match the phonemizer so each voice is pronounced natively.
+        lang = voice[0] if voice and voice[0] in ("a", "b", "h") else self.default_lang
         if lang not in self._pipes:
             self._pipes[lang] = self._KPipeline(lang_code=lang)
         return self._pipes[lang]
