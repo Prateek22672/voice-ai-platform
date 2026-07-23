@@ -58,11 +58,16 @@ VALID_VOICE_IDS = {v["id"] for v in VOICE_CATALOG}
 # file so the choice survives restarts; falls back to KOKORO_VOICE env, then af_heart.
 _VOICE_STATE_FILE = os.path.join(os.getenv("VOICE_DIR", "./voices"), "_default_voice.txt")
 
+def _voice_ok(v):
+    """A voice is usable if it's a built-in Kokoro voice OR an 'eleven:<id>' premium voice
+    (only when the ElevenLabs key is configured)."""
+    return v in VALID_VOICE_IDS or (v.startswith("eleven:") and bool(os.getenv("ELEVENLABS_API_KEY")))
+
 def _load_default_voice():
     try:
         with open(_VOICE_STATE_FILE, encoding="utf-8") as f:
             v = f.read().strip()
-            if v in VALID_VOICE_IDS:
+            if _voice_ok(v):
                 return v
     except Exception:
         pass
@@ -84,12 +89,30 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"], allow_credentials=False)
 
 _adapter = None
+_eleven = None
 
 def get_adapter():
     global _adapter
     if _adapter is None:
         _adapter = load_adapter(os.getenv("TTS_BACKEND", "kokoro"))
     return _adapter
+
+def adapter_for(voice):
+    """Hybrid per-voice routing: a voice id of the form 'eleven:<elevenlabs_voice_id>' is spoken
+    through ElevenLabs (premium, ultra-natural — e.g. the 'Anushri' e-commerce voice from their
+    library) while every other voice uses the default backend (Kokoro). Lets ONE deployment mix
+    free and premium voices per session instead of switching the whole backend.
+    Returns (adapter, voice_id_for_that_adapter)."""
+    global _eleven
+    if voice and voice.startswith("eleven:"):
+        if os.getenv("ELEVENLABS_API_KEY"):
+            if _eleven is None:
+                from adapters.elevenlabs_adapter import ElevenLabsAdapter
+                _eleven = ElevenLabsAdapter()
+            return _eleven, voice.split(":", 1)[1]
+        # no key configured -> degrade gracefully to the default backend's default voice
+        return get_adapter(), None
+    return get_adapter(), voice
 
 def wav_header(sr: int, data_len: int) -> bytes:
     return (b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVEfmt " +
@@ -108,9 +131,8 @@ def health():
 
 @app.post("/v1/tts")
 async def synth(body: dict, tenant=Depends(verify_api_key)):
-    ad = get_adapter()
     text = normalize(body["text"])
-    voice = body.get("voice") or _DEFAULT_VOICE
+    ad, voice = adapter_for(body.get("voice") or _DEFAULT_VOICE)
     t0 = time.time()
     chunks = []
     first_chunk_ms = None
@@ -135,14 +157,15 @@ async def synth_stream_ws(ws: WebSocket):
             if req.get("event") == "close":
                 break
             text = normalize(req["text"])
+            sad, voice = adapter_for(req.get("voice") or _DEFAULT_VOICE)
             t0 = time.time()
             first = None
             for sentence in split_sentences(text):
-                async for chunk in ad.synth_stream(sentence, req.get("voice") or _DEFAULT_VOICE):
+                async for chunk in sad.synth_stream(sentence, voice):
                     if first is None:
                         first = int((time.time()-t0)*1000)
                     await ws.send_bytes(chunk)
-            await ws.send_text(json.dumps({"type": "done", "sample_rate": ad.sample_rate,
+            await ws.send_text(json.dumps({"type": "done", "sample_rate": sad.sample_rate,
                                            "first_chunk_ms": first}))
     except Exception:
         pass
@@ -206,8 +229,8 @@ async def set_default_voice(body: dict, x_admin_password: str = Header(default="
     if admin and x_admin_password != admin:
         raise HTTPException(401, "bad admin password")
     v = (body.get("voice") or "").strip()
-    if v not in VALID_VOICE_IDS:
-        raise HTTPException(400, "unknown voice")
+    if not _voice_ok(v):
+        raise HTTPException(400, "unknown voice (built-in id, or eleven:<voice_id> with an ElevenLabs key)")
     global _DEFAULT_VOICE
     _DEFAULT_VOICE = v
     _save_default_voice(v)

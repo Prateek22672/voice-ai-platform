@@ -32,8 +32,10 @@ async def stream_completion(messages: list[dict], model: str | None = None) -> A
     """Yields text deltas. First token latency = what matters for voice."""
     import litellm
     model = model or os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+    # 220 tokens ≈ 4-5 spoken sentences — enough for any conversational turn; the sentence cap
+    # in conversation-service cuts earlier anyway. (Was 300, which allowed paragraph replies.)
     kwargs = dict(model=model, messages=messages, stream=True,
-                  max_tokens=int(os.getenv("LLM_MAX_TOKENS", "300")))
+                  max_tokens=int(os.getenv("LLM_MAX_TOKENS", "220")))
     try:
         # ask the provider to report exact token usage on the final stream chunk
         resp = await litellm.acompletion(**kwargs, stream_options={"include_usage": True})

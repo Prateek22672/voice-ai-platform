@@ -16,11 +16,27 @@ def _to_words(s: str) -> str:
 def _num_to_words(m):
     return _to_words(m.group(0))
 
+# Interjections the LLM is encouraged to use ("Hmm,", "Ohh —"). Spell them the way the TTS
+# pronounces them most naturally (a trailing comma reads as a short human pause).
+_INTERJECTIONS = {
+    r"\bhmm+\b": "hmm", r"\bmm+\b": "mmm", r"\bohh+\b": "ohh",
+    r"\bahh+\b": "ahh", r"\buhm+\b": "um", r"\bok\b": "okay",
+}
+
 def normalize(text: str) -> str:
+    # Speakability guard: strip anything the LLM shouldn't have emitted for a voice call —
+    # markdown marks, emoji and other symbols read out loud sound broken.
+    text = re.sub(r"[*_`#>|~\[\]]+", " ", text)
+    text = re.sub(r"[\U0001F000-\U0001FAFF☀-➿️]", "", text)  # emoji / dingbats
+    text = text.replace("—", ", ").replace("–", ", ").replace("…", ", ")     # dash/ellipsis -> spoken pause
+    for pat, rep in _INTERJECTIONS.items():
+        text = re.sub(pat, rep, text, flags=re.IGNORECASE)
     for k, v in _ABBREV.items():
         text = text.replace(k, v)
     text = re.sub(r"\$(\d[\d,]*)", lambda m: _to_words(m.group(1)) + " dollars", text)
     text = re.sub(r"\b\d[\d,]{0,8}\b", _num_to_words, text)
+    text = re.sub(r"\s*,\s*,+", ", ", text)          # collapse ",  ," left by the replacements
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 

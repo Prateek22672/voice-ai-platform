@@ -142,12 +142,15 @@ agent's audio back. This runs the whole STT → LLM → TTS loop for you.
   - `greet:true` → **the agent opens the conversation** (greets + asks the first question) without
     waiting for the candidate to speak. Optionally pass `"greeting_prompt":"<how to open>"` to
     control the opening line. Omit `greet` (or set false) to have the agent wait for the user first.
-- Then send: binary **PCM16 mono 16 kHz** mic frames.
+- Then send: binary **PCM16 mono 16 kHz** mic frames — **continuously, including while the agent
+  is speaking** (keep `echoCancellation: true` on `getUserMedia`; that's what stops self-hearing).
 - You receive:
   - binary **PCM16 mono 24 kHz** = agent speech (play it),
   - JSON events: `ready`, `state` (`agent`/`listening`), `partial_transcript`, `transcript`,
-    `agent_text`, `audio_done` (`{sample_rate}`), `turn_done`.
-- Half-duplex: **mute the mic while the agent is speaking** (state `agent`) so it doesn't hear itself.
+    `agent_text`, `audio_done` (`{sample_rate}`), `turn_done`, `interrupt`.
+- **Barge-in (full-duplex):** if the user starts talking while the agent is speaking, the server
+  stops generation and sends `{"type":"interrupt"}` — on that event you MUST stop every scheduled
+  audio buffer immediately so the agent goes silent, then keep streaming the mic as normal.
 
 ### Drop-in client class
 ```js
@@ -159,8 +162,12 @@ class VoiceAgent {
     this.onLog = onLog || (() => {});
     this.ttsRate = 24000; this.nextPlay = 0; this.pendingPause = 0;
     this.agentActive = false; this.agentPlaying = false;
+    this.liveSources = [];           // scheduled audio, flushed instantly on barge-in
   }
-  micMuted() { return this.agentActive || this.agentPlaying; }
+  flushPlayback() {                  // the user interrupted -> silence the agent mid-word
+    this.liveSources.forEach((s) => { try { s.stop(); } catch {} });
+    this.liveSources = []; this.nextPlay = 0; this.pendingPause = 0; this.agentPlaying = false;
+  }
 
   async start() {
     this.ctx = new AudioContext();
@@ -175,7 +182,7 @@ class VoiceAgent {
       const src = this.ctx.createMediaStreamSource(this.stream);
       const proc = this.ctx.createScriptProcessor(4096, 1, 1);
       proc.onaudioprocess = (e) => {
-        if (this.micMuted()) return;
+        // full-duplex: mic stays hot even while the agent speaks — that's what enables barge-in
         const f32 = e.inputBuffer.getChannelData(0);
         const ds = this.#downsample(f32, this.inRate);
         const i16 = new Int16Array(ds.length);
@@ -190,9 +197,13 @@ class VoiceAgent {
       if (typeof ev.data === 'string') {
         const d = JSON.parse(ev.data);
         if (d.type === 'state') this.agentActive = (d.state === 'agent');
-        else if (d.type === 'transcript') this.onLog('you', d.text);
+        else if (d.type === 'interrupt') this.flushPlayback();   // user talked over the agent
+        else if (d.type === 'transcript') {                      // new user turn -> stale tail audio off
+          if (this.agentPlaying) this.flushPlayback();
+          this.onLog('you', d.text); }
         else if (d.type === 'agent_text') this.onLog('agent', d.text);
-        else if (d.type === 'audio_done') { this.ttsRate = d.sample_rate || 24000; this.pendingPause = 0.22; }
+        else if (d.type === 'audio_done') { this.ttsRate = d.sample_rate || 24000;
+          this.pendingPause = 0.15 + Math.random() * 0.2; }      // varied breath between sentences
       } else {
         this.#play(ev.data);
       }
@@ -224,6 +235,8 @@ class VoiceAgent {
     const buf = this.ctx.createBuffer(1, f32.length, this.ttsRate);
     buf.copyToChannel(f32, 0);
     const s = this.ctx.createBufferSource(); s.buffer = buf; s.connect(this.ctx.destination);
+    this.liveSources.push(s);
+    s.onended = () => { const i = this.liveSources.indexOf(s); if (i >= 0) this.liveSources.splice(i, 1); };
     const now = this.ctx.currentTime;
     if (this.nextPlay < now + 0.12) this.nextPlay = now + 0.12;
     if (this.pendingPause) { this.nextPlay += this.pendingPause; this.pendingPause = 0; }

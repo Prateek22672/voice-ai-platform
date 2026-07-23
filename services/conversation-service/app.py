@@ -83,12 +83,29 @@ def mem() -> ConversationMemory:
 def health():
     return {"ok": True, "service": "conversation", "model": os.getenv("LLM_MODEL", "claude-sonnet-4-6")}
 
+# Spoken-style contract, appended to EVERY system prompt (default AND custom). Custom prompts
+# used to bypass the brevity rules entirely — that's where the giant-paragraph replies came from.
+# Also teaches the model to sound like a person on a call: contractions, small reactions
+# ("Hmm", "Oh nice", "Right"), one thought at a time.
+NATURAL_STYLE = (
+    " CRITICAL voice-call style rules: You are talking OUT LOUD on a live phone-style call, not "
+    "writing. Keep every reply to at most two or three short spoken sentences, then stop and let "
+    "them respond — never deliver a paragraph or a list. Ask at most one question per turn. Sound "
+    "like a warm, real person: use contractions, and now and then (not every turn) open with a "
+    "tiny natural reaction like 'Hmm,', 'Oh nice —', 'Right,', 'Okay, got it.', or 'Ah, I see.' "
+    "React briefly to what they just said before moving on. Absolutely no markdown, bullet "
+    "points, headings, or emojis — only plain speakable words. Only give a longer answer if the "
+    "user explicitly asks you to elaborate, and even then pause after a few sentences."
+)
+
 @app.post("/v1/sessions")
 async def create_session(body: dict, tenant=Depends(verify_api_key)):
     sid = str(uuid.uuid4())
-    system = body.get("system_prompt",
+    system = body.get("system_prompt") or (
         "You are a helpful voice assistant. Keep replies short and conversational — "
         "1-3 sentences. You are speaking aloud, so no markdown, no lists.")
+    if os.getenv("LLM_NATURAL_STYLE", "1") == "1":
+        system += NATURAL_STYLE
     # Latency trick: the FIRST sentence gates time-to-first-audio (it must be fully synthesized
     # before the caller hears anything). A short opener = the agent starts speaking sooner.
     if os.getenv("LLM_STYLE_HINT", "1") == "1":
@@ -115,32 +132,55 @@ async def turn(sid: str, body: dict, tenant=Depends(verify_api_key)):
     if len(messages) == 0:
         raise HTTPException(404, "session not found or expired")
 
+    # Hard backstop against paragraph-length replies: stop streaming after this many spoken
+    # sentences even if the model keeps going. The style prompt asks for 2-3; this enforces it.
+    max_sentences = int(os.getenv("LLM_MAX_SENTENCES", "4"))
+
     async def gen():
         t0 = time.time()
-        buf, full, first_ms = "", [], None
+        buf, first_ms = "", None
+        spoken = []            # sentences actually sent to TTS — this is what goes into memory
+        interrupted = False
         try:
             async for delta in stream_completion(messages):
                 if first_ms is None:
                     first_ms = int((time.time()-t0)*1000)
                 if await m.r.get(f"conv:{sid}:interrupt"):
+                    interrupted = True
                     yield f'data: {json.dumps({"type":"interrupted"})}\n\n'
                     break
                 buf += delta
-                full.append(delta)
-                # flush complete sentences immediately for TTS
-                while True:
+                # flush complete sentences immediately for TTS (never past the cap)
+                while len(spoken) < max_sentences:
                     match = re.search(r"^(.*?[.!?])(\s+|$)", buf)
                     if not match:
                         break
                     sentence = match.group(1).strip()
                     buf = buf[match.end():]
                     if sentence:
+                        spoken.append(sentence)
                         yield f'data: {json.dumps({"type":"sentence","sentence":sentence,"first_token_ms":first_ms})}\n\n'
-            if buf.strip():
+                if len(spoken) >= max_sentences:
+                    break   # backstop: reply is long enough — cut cleanly at a sentence boundary
+            if not interrupted and len(spoken) < max_sentences and buf.strip():
+                spoken.append(buf.strip())
                 yield f'data: {json.dumps({"type":"sentence","sentence":buf.strip(),"first_token_ms":first_ms})}\n\n'
             yield f'data: {json.dumps({"type":"done"})}\n\n'
         finally:
-            text = "".join(full).strip()
+            # Memory holds only what was actually SPOKEN. On barge-in, mark the cut so the
+            # model knows it was interrupted and can pick up naturally instead of repeating.
+            # (A barge-in usually closes this SSE stream before the loop sees the Redis flag,
+            # so re-check it here — otherwise the marker would almost never be recorded.)
+            if not interrupted:
+                try:
+                    interrupted = bool(await m.r.get(f"conv:{sid}:interrupt"))
+                except Exception:
+                    pass
+            text = " ".join(spoken).strip()
+            if interrupted:
+                text = (text + " —").strip() if text else ""
+                if text:
+                    text += " [the user interrupted me here, so I stopped talking]"
             if text:
                 await m.add_turn(sid, "assistant", text)
 

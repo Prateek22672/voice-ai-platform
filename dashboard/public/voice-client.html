@@ -45,8 +45,8 @@
   <a class="back" href="/">← Overview</a>
   <h2>Talk to the Agent</h2>
   <p class="sub">Live conversation: your speech is transcribed by <b>Whisper</b>, answered by <b>Groq</b>,
-     and spoken back with <b>Kokoro</b>. Speak naturally, then <b>pause</b> when you finish — that's how
-     the agent knows it's your turn.</p>
+     and spoken back with <b>Kokoro</b>. Speak naturally, then <b>pause</b> when you finish — and if the
+     agent talks too long, <b>just start talking</b>: it will stop and listen, like a real person.</p>
 
   <label>Gateway WS URL</label>
   <input id="wsurl" value="ws://localhost:8000/v1/agent/stream">
@@ -71,8 +71,17 @@
 var ws, ctx, srcNode, proc, stream;
 var IN_RATE = 16000, TTS_RATE = 24000, nextPlayTime = 0, agentPlaying = false, playEndTimer = null;
 var pendingPause = 0;      // silence (s) to insert before the next sentence for natural pacing
-var agentActive = false;   // server says it's the agent's turn (mic muted)
-function micMuted(){ return agentActive || agentPlaying; }
+var agentActive = false;   // server says it's the agent's turn (UI state only — mic stays HOT)
+var liveSources = [];      // scheduled audio chunks, so a barge-in can silence them instantly
+
+// Barge-in: the server told us the user talked over the agent — kill every queued/playing
+// audio chunk RIGHT NOW so the agent goes quiet mid-word, like a person who's been interrupted.
+function flushPlayback(){
+  for (var i=0;i<liveSources.length;i++){ try{ liveSources[i].stop(); }catch(e){} }
+  liveSources = [];
+  nextPlayTime = 0; pendingPause = 0; agentPlaying = false;
+  if (playEndTimer){ clearTimeout(playEndTimer); playEndTimer = null; }
+}
 
 var logEl = document.getElementById("log");
 var bar = document.getElementById("statusbar");
@@ -123,6 +132,8 @@ function enqueuePcm(arrbuf){
   buf.copyToChannel(f32, 0);
   var s = ctx.createBufferSource();
   s.buffer = buf; s.connect(ctx.destination);
+  liveSources.push(s);
+  s.onended = function(){ var ix = liveSources.indexOf(s); if (ix >= 0) liveSources.splice(ix, 1); };
   var now = ctx.currentTime;
   // 0.12s cushion smooths out network jitter between streamed chunks (was 0.06 = too tight).
   if (nextPlayTime < now + 0.12) nextPlayTime = now + 0.12;
@@ -131,9 +142,9 @@ function enqueuePcm(arrbuf){
   s.start(nextPlayTime);
   nextPlayTime += buf.duration;
   agentPlaying = true;
-  setState("speaking", "🗣️ Agent speaking… (mic paused)");
+  setState("speaking", "🗣️ Agent speaking — just start talking to interrupt");
   if (playEndTimer) clearTimeout(playEndTimer);
-  var msLeft = (nextPlayTime - now) * 1000 + 250;   // small tail so the echo fully settles
+  var msLeft = (nextPlayTime - now) * 1000 + 250;   // small tail before flipping the UI back
   playEndTimer = setTimeout(function(){
     agentPlaying = false;
     if (!agentActive) setState("listening","🎙️ Your turn — speak now");
@@ -156,8 +167,8 @@ async function start(){
     srcNode = ctx.createMediaStreamSource(stream);
     proc = ctx.createScriptProcessor(4096, 1, 1);
     proc.onaudioprocess = function(e){
-      // half-duplex: don't capture while the agent is speaking (kills echo / self-transcription)
-      if (micMuted()){ levelEl.style.width = "0"; return; }
+      // FULL-DUPLEX: the mic stays hot even while the agent speaks, so you can interrupt it
+      // any time. echoCancellation:true keeps the agent's own voice out of the stream.
       var f32 = e.inputBuffer.getChannelData(0);
       // mic level meter
       var peak=0; for (var k=0;k<f32.length;k++){ var a=Math.abs(f32[k]); if(a>peak)peak=a; }
@@ -175,13 +186,22 @@ async function start(){
       var d = JSON.parse(ev.data);
       if (d.type === "ready") log("sys","session "+d.session_id);
       else if (d.type === "state"){
-        if (d.state === "agent"){ agentActive = true; setState("speaking","🗣️ Agent speaking… (mic paused — please wait)"); }
+        if (d.state === "agent"){ agentActive = true; setState("speaking","🗣️ Agent speaking — just start talking to interrupt"); }
         else { agentActive = false; if(!agentPlaying) setState("listening","🎙️ Your turn — speak now"); }
       }
+      else if (d.type === "interrupt"){ // user barged in -> silence the agent immediately
+        flushPlayback(); log("sys","— interrupted —");
+        setState("listening","🎙️ Go ahead — I'm listening");
+      }
       else if (d.type === "partial_transcript"){ showPartial(d.text); }
-      else if (d.type === "transcript"){ commitPartial(d.text); setState("thinking","✍️ Heard you — the agent is thinking…"); }
+      else if (d.type === "transcript"){
+        // your new turn is committed — any agent audio still queued is stale, cut it off
+        if (agentPlaying) flushPlayback();
+        commitPartial(d.text); setState("thinking","✍️ Heard you — the agent is thinking…"); }
       else if (d.type === "agent_text") log("agent","Agent: "+d.text);
-      else if (d.type === "audio_done"){ TTS_RATE = d.sample_rate || 24000; pendingPause = 0.22; }
+      else if (d.type === "audio_done"){ TTS_RATE = d.sample_rate || 24000;
+        // vary the inter-sentence breath (150–350ms) — a fixed gap sounds mechanical
+        pendingPause = 0.15 + Math.random()*0.2; }
       else if (d.type === "turn_done"){ if(!agentPlaying) setState("listening","🎙️ Listening — speak now"); }
       else if (d.type === "error") log("sys","ERROR: "+d.error);
     } else {

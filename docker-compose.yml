@@ -54,6 +54,7 @@ services:
       WHISPER_COMPUTE: ${WHISPER_COMPUTE:-default}
       STT_SILENCE_FLUSH_S: ${STT_SILENCE_FLUSH_S:-0.9}
       STT_PARTIAL_INTERVAL_S: ${STT_PARTIAL_INTERVAL_S:-1.0}
+      STT_SPEECH_START_S: ${STT_SPEECH_START_S:-0.35}   # speech this long = barge-in trigger; raise to 0.5 if echoey
       STT_MIN_SPEECH_S: ${STT_MIN_SPEECH_S:-0.45}
       STT_PREPROCESS: ${STT_PREPROCESS:-1}        # clean audio before STT (DC/rumble + normalize)
       STT_POSTPROCESS: ${STT_POSTPROCESS:-1}      # strip Whisper hallucination phrases + repeats
@@ -108,6 +109,8 @@ services:
       TTS_WS: ws://tts-service:8002/v1/tts/stream
       CONV_URL: http://conversation-service:8003
       DEV_API_KEY: ${DEV_API_KEY:-dev-test-key}
+      BARGE_IN: ${BARGE_IN:-1}                    # 1 = user can interrupt the agent mid-sentence
+      FILLER_ENABLED: ${FILLER_ENABLED:-1}        # instant "Mm-hmm" acknowledgements
     ports: ["8000:8000"]
     depends_on: [stt-service, tts-service, conversation-service]
 

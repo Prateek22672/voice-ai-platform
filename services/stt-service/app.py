@@ -357,9 +357,15 @@ async def stream_transcribe(ws: WebSocket):
     # If the user clearly spoke (>= this) but we got NOTHING intelligible, it's mumble/gibberish/
     # cross-talk — the gateway should gently ask them to repeat. Below it, we stay silent (noise).
     UNCLEAR_MIN_SPEECH_S = float(os.getenv("STT_UNCLEAR_MIN_SPEECH_S", "0.7"))
+    # Barge-in: announce "the user started talking" the moment we've heard this much REAL
+    # speech in the current utterance. The gateway uses it to stop the agent mid-sentence.
+    # High enough that residual echo / a cough doesn't cut the agent off, low enough to feel
+    # instant (~a third of a second).
+    SPEECH_START_S = float(os.getenv("STT_SPEECH_START_S", "0.35"))
     preroll = np.zeros(0, dtype=np.float32)
     in_utt = False
     speech_dur = 0.0                 # seconds of ACTUAL speech in the current utterance
+    announced = False                # speech_start already sent for this utterance
 
     def _save_wav(audio, name):
         import wave
@@ -407,10 +413,11 @@ async def stream_transcribe(ws: WebSocket):
                 ev = json.loads(msg["text"])
                 if ev.get("event") == "flush":
                     await transcribe_and_send(final=True, had_speech=(speech_dur >= UNCLEAR_MIN_SPEECH_S))
-                    in_utt = False; last_partial = 0.0; speech_dur = 0.0
+                    in_utt = False; last_partial = 0.0; speech_dur = 0.0; announced = False
                 elif ev.get("event") == "reset":
                     # discard whatever is buffered (echo/noise captured during the agent's turn)
-                    buf = np.zeros(0, dtype=np.float32); in_utt = False; last_partial = 0.0; speech_dur = 0.0
+                    buf = np.zeros(0, dtype=np.float32); in_utt = False; last_partial = 0.0
+                    speech_dur = 0.0; announced = False
                 elif ev.get("event") == "close":
                     await transcribe_and_send(final=True)
                     break
@@ -429,6 +436,11 @@ async def stream_transcribe(ws: WebSocket):
                     buf = np.concatenate([buf, pcm])
                 last_speech = now
                 speech_dur += len(pcm) / SR
+                if not announced and speech_dur >= SPEECH_START_S:
+                    # confirmed real speech onset -> tell the gateway NOW (this is what lets the
+                    # user interrupt the agent mid-sentence instead of waiting for the final).
+                    announced = True
+                    await ws.send_text(json.dumps({"type": "speech_start"}))
                 # live partials re-transcribe the growing buffer. That's FREE on local Whisper,
                 # but each one is a PAID call on a cloud backend — so only do partials on the
                 # free local model. Cloud backends bill exactly once per utterance (the final).
@@ -445,7 +457,7 @@ async def stream_transcribe(ws: WebSocket):
                         await transcribe_and_send(final=True, had_speech=(speech_dur >= UNCLEAR_MIN_SPEECH_S))
                     else:
                         buf = np.zeros(0, dtype=np.float32)   # too little speech = noise blip, drop it
-                    in_utt = False; last_partial = 0.0; speech_dur = 0.0
+                    in_utt = False; last_partial = 0.0; speech_dur = 0.0; announced = False
             else:
                 # idle: keep a rolling pre-roll of the most recent audio
                 preroll = np.concatenate([preroll, pcm])[-PREROLL:]
