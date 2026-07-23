@@ -148,7 +148,7 @@ services:
 
   dashboard:
     build: { context: ., dockerfile: dashboard/Dockerfile }
-    ports: ["3000:3000"]
+    ports: ["3001:3000"]   # host 3001 (3000 is taken on the VPS); Caddy proxies to container :3000
 
   # ---- reverse proxy + Cloudflare Tunnel (public HTTPS at voice.<domain>) ----
   caddy:
