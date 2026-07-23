@@ -31,22 +31,33 @@ BARGE_IN = os.getenv("BARGE_IN", "1") == "1"
 # Instant backchannel: a tiny human acknowledgement ("Mm-hmm", "Hmm, okay") plays the moment the
 # user's turn ends, masking LLM+TTS think-time the way a real listener would. Synthesized once per
 # (text, voice), cached as PCM. Variety matters — one repeated "Mm-hmm." sounds robotic fast.
+# Localized per session language so a Hindi/Telugu caller hears native acknowledgements.
 FILLER_ENABLED = os.getenv("FILLER_ENABLED", "1") == "1"
-FILLERS = [
-    "Mm-hmm.", "Okay.", "Alright.", "Right.", "Hmm.",
-    "Mmm, okay.", "Ohh, I see.", "Got it.", "Ah, okay.", "Mm-hmm, right.",
-]
+FILLERS_BY_LANG = {
+    "en": ["Mm-hmm.", "Okay.", "Alright.", "Right.", "Hmm.",
+           "Mmm, okay.", "Ohh, I see.", "Got it.", "Ah, okay.", "Mm-hmm, right."],
+    "hi": ["हाँ।", "अच्छा।", "हाँ जी।", "ठीक है।", "हम्म।", "अच्छा अच्छा।", "समझ गई।"],
+    "te": ["సరే.", "అవును.", "హా.", "అలాగే.", "సరే సరే.", "అర్థమైంది."],
+}
 # After a question from the user, an acknowledgement sounds wrong ("Mm-hmm." to "what's the price?")
 # — a short thinking sound fits better.
-THINKING_FILLERS = ["Hmm.", "Mmm.", "Okay, so.", "Right, so.", "Let's see."]
+THINKING_BY_LANG = {
+    "en": ["Hmm.", "Mmm.", "Okay, so.", "Right, so.", "Let's see."],
+    "hi": ["हम्म।", "एक मिनट।", "अच्छा, देखते हैं।"],
+    "te": ["హ్మ్.", "ఒక్క నిమిషం.", "సరే, చూద్దాం."],
+}
 _filler_cache: dict[tuple, bytes] = {}
 
-def _pick_filler(user_text: str) -> str:
+def _pick_filler(user_text: str, lang: str = "en") -> str:
     t = (user_text or "").strip()
     if t.endswith("?") or t.lower().split(" ")[0] in (
             "what", "why", "how", "when", "where", "who", "can", "could", "do", "does", "is", "are"):
-        return random.choice(THINKING_FILLERS)
-    return random.choice(FILLERS)
+        return random.choice(THINKING_BY_LANG.get(lang, THINKING_BY_LANG["en"]))
+    return random.choice(FILLERS_BY_LANG.get(lang, FILLERS_BY_LANG["en"]))
+
+# Sensible default voice per language when the session doesn't pick one explicitly:
+# Hindi -> Kokoro's Hindi voice; Telugu -> the open-source MMS Telugu voice.
+DEFAULT_VOICE_BY_LANG = {"hi": "hf_alpha", "te": "te_mms"}
 
 async def _filler_pcm(text: str, voice: str = "") -> bytes:
     key = (text, voice)
@@ -69,14 +80,28 @@ async def _filler_pcm(text: str, voice: str = "") -> bytes:
 # across consecutive misses; a cooldown stops it nagging on noise; resets on the next good transcript.
 REPROMPT_ENABLED = os.getenv("REPROMPT_ENABLED", "1") == "1"
 REPROMPT_COOLDOWN_S = float(os.getenv("REPROMPT_COOLDOWN_S", "3.0"))
-REPROMPTS = [
-    ["Sorry, I didn't quite catch that — could you say it again?",
-     "Hmm, I missed that. Could you repeat it?",
-     "Sorry, could you say that once more?"],
-    ["Still didn't catch that — could you speak a little louder?",
-     "I'm having trouble hearing you. A bit louder, please?"],
-    ["I'm still having trouble hearing you clearly. Could you check your microphone and try again?"],
-]
+REPROMPTS_BY_LANG = {
+    "en": [
+        ["Sorry, I didn't quite catch that — could you say it again?",
+         "Hmm, I missed that. Could you repeat it?",
+         "Sorry, could you say that once more?"],
+        ["Still didn't catch that — could you speak a little louder?",
+         "I'm having trouble hearing you. A bit louder, please?"],
+        ["I'm still having trouble hearing you clearly. Could you check your microphone and try again?"],
+    ],
+    "hi": [
+        ["माफ़ कीजिए, मैं ठीक से सुन नहीं पाई — फिर से बोलिए?",
+         "हम्म, समझ नहीं आया। दोबारा बोलेंगे?"],
+        ["अभी भी साफ़ नहीं आया — थोड़ा ज़ोर से बोलिए?"],
+        ["आवाज़ साफ़ नहीं आ रही है। एक बार अपना माइक चेक कर लीजिए?"],
+    ],
+    "te": [
+        ["సారీ, సరిగ్గా వినపడలేదు — మళ్ళీ చెప్పగలరా?",
+         "హ్మ్, అర్థం కాలేదు. మరోసారి చెప్పండి?"],
+        ["ఇంకా సరిగ్గా వినపడటం లేదు — కొంచెం గట్టిగా చెప్పగలరా?"],
+        ["మీ మాట స్పష్టంగా రావడం లేదు. ఒకసారి మైక్ చెక్ చేసుకోగలరా?"],
+    ],
+}
 
 @app.get("/health")
 def health():
@@ -94,6 +119,7 @@ async def agent_stream(ws: WebSocket):
     sess_turns = 0                 # metrics: completed agent turns this session
     sess_first_audio = []          # metrics: per-turn ms from transcript -> first agent audio
     session_voice = ""             # per-session TTS voice (from the start event); "" = platform default
+    session_lang = "en"            # per-session language (en | hi | te) — drives STT, LLM, fillers
 
     async def send_json(obj: dict):
         try:
@@ -132,7 +158,7 @@ async def agent_stream(ws: WebSocket):
                     await send_json({"type": "transcript", "text": text})
                     if FILLER_ENABLED:
                         # instant acknowledgement while the real reply is being generated
-                        pcm = await _filler_pcm(_pick_filler(text), session_voice)
+                        pcm = await _filler_pcm(_pick_filler(text, session_lang), session_voice)
                         if pcm:
                             await ws.send_bytes(pcm)
                 async with http.stream("POST", f"{CONV_URL}/v1/sessions/{session_id}/turn",
@@ -156,7 +182,12 @@ async def agent_stream(ws: WebSocket):
                                     await ws.send_bytes(msg)
                                 else:
                                     d = json.loads(msg)
-                                    if d.get("type") == "done":
+                                    if d.get("type") == "meta":
+                                        # sample rate BEFORE the first chunk (MMS Telugu is 16k,
+                                        # Kokoro 24k) so the client never plays at the wrong speed
+                                        await send_json({"type": "audio_meta",
+                                                         "sample_rate": d.get("sample_rate", 24000)})
+                                    elif d.get("type") == "done":
                                         await send_json({"type": "audio_done",
                                                          "sample_rate": d.get("sample_rate", 24000)})
                                         break
@@ -187,7 +218,10 @@ async def agent_stream(ws: WebSocket):
                         await ws.send_bytes(msg)
                     else:
                         d = json.loads(msg)
-                        if d.get("type") == "done":
+                        if d.get("type") == "meta":
+                            await send_json({"type": "audio_meta",
+                                             "sample_rate": d.get("sample_rate", 24000)})
+                        elif d.get("type") == "done":
                             await send_json({"type": "audio_done",
                                              "sample_rate": d.get("sample_rate", 24000)})
                             break
@@ -233,9 +267,10 @@ async def agent_stream(ws: WebSocket):
             if now - last_reprompt < REPROMPT_COOLDOWN_S:
                 return
             last_reprompt = now
-            tier = min(unclear_count, len(REPROMPTS) - 1)   # escalate with each consecutive miss
+            prompts = REPROMPTS_BY_LANG.get(session_lang, REPROMPTS_BY_LANG["en"])
+            tier = min(unclear_count, len(prompts) - 1)     # escalate with each consecutive miss
             unclear_count += 1
-            turn_task = asyncio.create_task(run_line(random.choice(REPROMPTS[tier])))
+            turn_task = asyncio.create_task(run_line(random.choice(prompts[tier])))
 
         try:
             stt = await websockets.connect(STT_WS)
@@ -275,11 +310,20 @@ async def agent_stream(ws: WebSocket):
                 if msg.get("text"):
                     ev = json.loads(msg["text"])
                     if ev.get("event") == "start":
-                        session_voice = (ev.get("voice") or "").strip()   # per-session natural voice
+                        session_lang = (ev.get("language") or "en").strip().lower()
+                        session_voice = (ev.get("voice") or "").strip() or \
+                            DEFAULT_VOICE_BY_LANG.get(session_lang, "")   # per-session natural voice
+                        # tell STT which language to transcribe (Whisper does hi/te natively)
+                        try:
+                            await stt.send(json.dumps({"event": "config", "language": session_lang}))
+                        except Exception:
+                            pass
                         r = await http.post(f"{CONV_URL}/v1/sessions", headers=HDRS,
-                                            json={"system_prompt": ev.get("system_prompt", "")})
+                                            json={"system_prompt": ev.get("system_prompt", ""),
+                                                  "language": session_lang})
                         session_id = r.json()["session_id"]
-                        await send_json({"type": "ready", "session_id": session_id})
+                        await send_json({"type": "ready", "session_id": session_id,
+                                         "language": session_lang, "voice": session_voice})
                         # Optional: agent OPENS the conversation (greet + first question) instead of
                         # waiting for the candidate to speak first. Interview platforms want this.
                         if ev.get("greet"):

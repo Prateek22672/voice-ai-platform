@@ -51,6 +51,8 @@ VOICE_CATALOG = [
     {"id": "hf_beta",     "name": "Ananya",   "accent": "Hindi",    "gender": "Female", "grade": "C",  "tag": "Clear Hindi/Hinglish"},
     {"id": "hm_omega",    "name": "Arjun",    "accent": "Hindi",    "gender": "Male",   "grade": "C",  "tag": "Steady Hindi/Hinglish",            "featured": True},
     {"id": "hm_psi",      "name": "Rohan",    "accent": "Hindi",    "gender": "Male",   "grade": "C",  "tag": "Energetic Hindi/Hinglish"},
+    # Telugu — open-source Meta MMS-TTS model (facebook/mms-tts-tel), no API cost
+    {"id": "te_mms",      "name": "Vani",     "accent": "Telugu",   "gender": "Female", "grade": "C",  "tag": "Telugu (open-source MMS)",         "featured": True},
 ]
 VALID_VOICE_IDS = {v["id"] for v in VOICE_CATALOG}
 
@@ -90,6 +92,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 
 _adapter = None
 _eleven = None
+_mms = None
 
 def get_adapter():
     global _adapter
@@ -103,7 +106,7 @@ def adapter_for(voice):
     library) while every other voice uses the default backend (Kokoro). Lets ONE deployment mix
     free and premium voices per session instead of switching the whole backend.
     Returns (adapter, voice_id_for_that_adapter)."""
-    global _eleven
+    global _eleven, _mms
     if voice and voice.startswith("eleven:"):
         if os.getenv("ELEVENLABS_API_KEY"):
             if _eleven is None:
@@ -112,6 +115,12 @@ def adapter_for(voice):
             return _eleven, voice.split(":", 1)[1]
         # no key configured -> degrade gracefully to the default backend's default voice
         return get_adapter(), None
+    if voice and voice.startswith("te_"):
+        # Telugu -> open-source Meta MMS-TTS (Kokoro has no Telugu). Lazy-loaded on first use.
+        if _mms is None:
+            from adapters.mms_adapter import MMSAdapter
+            _mms = MMSAdapter()
+        return _mms, voice
     return get_adapter(), voice
 
 def wav_header(sr: int, data_len: int) -> bytes:
@@ -158,6 +167,9 @@ async def synth_stream_ws(ws: WebSocket):
                 break
             text = normalize(req["text"])
             sad, voice = adapter_for(req.get("voice") or _DEFAULT_VOICE)
+            # announce the sample rate BEFORE any audio: adapters differ (Kokoro 24k, MMS 16k)
+            # and the client must never guess-play at the wrong speed
+            await ws.send_text(json.dumps({"type": "meta", "sample_rate": sad.sample_rate}))
             t0 = time.time()
             first = None
             for sentence in split_sentences(text):

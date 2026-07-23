@@ -146,11 +146,12 @@ def _confident(segments):
         return False
     return True
 
-def cloud_transcribe(audio_f32, backend):
+def cloud_transcribe(audio_f32, backend, lang=None):
     """Send one utterance to a cloud transcription API (OpenAI or Groq — same API shape).
     We request verbose_json so we get confidence scores and can REJECT gibberish/noise instead of
     inventing a sentence. Groq's Whisper runs on their fast LPU. Supports MULTIPLE keys:
-    set GROQ_API_KEY=key1,key2 — we round-robin and fail over to the next key on a 429."""
+    set GROQ_API_KEY=key1,key2 — we round-robin and fail over to the next key on a 429.
+    lang = per-session language override (hi/te/...); Whisper transcribes these natively."""
     import httpx
     cfg = CLOUD_STT[backend]
     keys = _keys_for(cfg["key"])
@@ -159,7 +160,7 @@ def cloud_transcribe(audio_f32, backend):
     model = os.getenv(cfg["model_env"], cfg["model_default"])
     wav = _pcm_to_wav(audio_f32)
     req_data = {"model": model, "response_format": "verbose_json",
-                "language": os.getenv("STT_LANG") or "en", "temperature": 0}
+                "language": lang or os.getenv("STT_LANG") or "en", "temperature": 0}
     prompt = os.getenv("STT_PROMPT", "").strip()      # domain vocabulary hint (e.g. interview terms)
     if prompt:
         req_data["prompt"] = prompt
@@ -210,6 +211,9 @@ _HALLUCINATIONS = {
     "thank you.", "thank you", "thanks for watching.", "thanks for watching",
     "thank you for watching.", "please subscribe.", "subscribe.", "you", "you.",
     ".", "..", "...", "bye.", "bye", "okay.", "so.", "the.", "i", "i.",
+    # Whisper's classic noise-hallucinations in Hindi/Telugu (video-outro phrases)
+    "धन्यवाद", "धन्यवाद।", "शुक्रिया", "सब्सक्राइब करें", "देखने के लिए धन्यवाद",
+    "ధన్యవాదాలు", "ధన్యవాదాలు.", "చూసినందుకు ధన్యవాదాలు",
 }
 def postprocess_text(t):
     """Drop known hallucination phrases (Whisper invents these on noise/near-silence) and
@@ -333,17 +337,19 @@ async def stream_transcribe(ws: WebSocket):
     last_speech = time.time()
     last_partial = 0.0
 
+    sess_lang = {"v": None}   # per-connection language override, set by {"event":"config"}
+
     def _do_transcribe(audio):
         audio = preprocess_audio(audio)   # OUR clean-up stage (DC/rumble removal + normalize)
         if STT_BACKEND in CLOUD_STT:
-            return postprocess_text(cloud_transcribe(audio, STT_BACKEND))
+            return postprocess_text(cloud_transcribe(audio, STT_BACKEND, lang=sess_lang["v"]))
         m = get_model()   # dynamic so a runtime switch back to whisper loads the model on demand
         # anti-hallucination: vad_filter drops non-speech, condition_on_previous_text=False
         # stops runaway invented text, temperature=0 is deterministic, and the no-speech /
         # log-prob thresholds discard low-confidence guesses (Whisper's classic "Thank you."
         # random-phrase hallucinations on noise / near-silence).
         segments, info = m.transcribe(
-            audio, language=os.getenv("STT_LANG") or None,
+            audio, language=sess_lang["v"] or os.getenv("STT_LANG") or None,
             initial_prompt=os.getenv("STT_PROMPT") or None,
             vad_filter=True, condition_on_previous_text=False, temperature=0.0,
             no_speech_threshold=0.6, log_prob_threshold=-1.0, compression_ratio_threshold=2.4)
@@ -414,6 +420,11 @@ async def stream_transcribe(ws: WebSocket):
                 if ev.get("event") == "flush":
                     await transcribe_and_send(final=True, had_speech=(speech_dur >= UNCLEAR_MIN_SPEECH_S))
                     in_utt = False; last_partial = 0.0; speech_dur = 0.0; announced = False
+                elif ev.get("event") == "config":
+                    # per-session settings from the gateway; language: en/hi/te ("" or "en" ->
+                    # default). Whisper handles Hindi/Telugu natively — just needs to be told.
+                    lang = str(ev.get("language") or "").strip().lower()
+                    sess_lang["v"] = lang if lang and lang != "auto" else None
                 elif ev.get("event") == "reset":
                     # discard whatever is buffered (echo/noise captured during the agent's turn)
                     buf = np.zeros(0, dtype=np.float32); in_utt = False; last_partial = 0.0

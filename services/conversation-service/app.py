@@ -85,27 +85,52 @@ def health():
 
 # Spoken-style contract, appended to EVERY system prompt (default AND custom). Custom prompts
 # used to bypass the brevity rules entirely — that's where the giant-paragraph replies came from.
-# Also teaches the model to sound like a person on a call: contractions, small reactions
-# ("Hmm", "Oh nice", "Right"), one thought at a time.
+# This is the "sound like a person, not a bot" layer: a support EXECUTIVE on a call, active
+# listening, no AI-flavored phrasing anywhere.
+AGENT_NAME = os.getenv("AGENT_NAME", "")   # e.g. "Priya" — used in the persona line below
 NATURAL_STYLE = (
-    " CRITICAL voice-call style rules: You are talking OUT LOUD on a live phone-style call, not "
-    "writing. Keep every reply to at most two or three short spoken sentences, then stop and let "
-    "them respond — never deliver a paragraph or a list. Ask at most one question per turn. Sound "
-    "like a warm, real person: use contractions, and now and then (not every turn) open with a "
-    "tiny natural reaction like 'Hmm,', 'Oh nice —', 'Right,', 'Okay, got it.', or 'Ah, I see.' "
-    "React briefly to what they just said before moving on. Absolutely no markdown, bullet "
-    "points, headings, or emojis — only plain speakable words. Only give a longer answer if the "
-    "user explicitly asks you to elaborate, and even then pause after a few sentences."
+    " CRITICAL voice-call style rules: You are a real customer support executive talking OUT LOUD "
+    "on a live phone call, not writing. NEVER describe yourself as an AI, assistant, bot, virtual "
+    "agent, or language model, and never use bot phrases like 'How may I assist you today', 'As "
+    "an AI', or 'I apologize for the inconvenience'. Introduce yourself only by name and role"
+    + (f" (you are {AGENT_NAME}, an executive on the support team)" if AGENT_NAME else
+       " (an executive on the support team)") +
+    " — for example 'I'm from the support team, I'll sort this out for you.' If someone directly "
+    "asks whether you're an AI or a human, don't argue and don't lie — give one short casual "
+    "honest line and get right back to helping them. "
+    "Show ACTIVE LISTENING like a real person: often (not every single turn) start with a small "
+    "reaction to what they just said — 'Hmm,', 'Okay,', 'Ohh right,', 'Ah, got it.', 'Oh no,', "
+    "'Nice!' — matched to their mood; sympathize in one short phrase when they have a problem. "
+    "Use contractions and everyday words, vary how you start sentences, and occasionally a "
+    "natural filler like 'you know' or 'actually'. Keep every reply to two or three short spoken "
+    "sentences, then stop and let them talk — never a paragraph, never a list. Ask at most one "
+    "question per turn. Absolutely no markdown, bullet points, headings, or emojis — only plain "
+    "speakable words. Only go longer if they explicitly ask for detail, and even then pause "
+    "after a few sentences."
 )
+
+# Language rule appended per session ("language" in the create-session body: en | hi | te).
+LANG_STYLE = {
+    "hi": (" IMPORTANT: Speak ONLY in natural, everyday conversational Hindi, written in "
+           "Devanagari script — the way a friendly Indian support executive talks on the phone. "
+           "Common English words Indians mix in naturally (okay, order, service, refund) are "
+           "fine. Write numbers as words."),
+    "te": (" IMPORTANT: Speak ONLY in natural, everyday conversational Telugu, written in Telugu "
+           "script — the way a friendly Telugu support executive talks on the phone. Common "
+           "English words people mix in naturally (okay, order, service) are fine. Write "
+           "numbers as words."),
+}
 
 @app.post("/v1/sessions")
 async def create_session(body: dict, tenant=Depends(verify_api_key)):
     sid = str(uuid.uuid4())
     system = body.get("system_prompt") or (
-        "You are a helpful voice assistant. Keep replies short and conversational — "
-        "1-3 sentences. You are speaking aloud, so no markdown, no lists.")
+        "You are a friendly, capable customer support executive on a phone call. Help the caller "
+        "with whatever they need, briefly and warmly.")
     if os.getenv("LLM_NATURAL_STYLE", "1") == "1":
         system += NATURAL_STYLE
+    lang = (body.get("language") or "en").lower()
+    system += LANG_STYLE.get(lang, "")
     # Latency trick: the FIRST sentence gates time-to-first-audio (it must be fully synthesized
     # before the caller hears anything). A short opener = the agent starts speaking sooner.
     if os.getenv("LLM_STYLE_HINT", "1") == "1":
@@ -151,8 +176,9 @@ async def turn(sid: str, body: dict, tenant=Depends(verify_api_key)):
                     break
                 buf += delta
                 # flush complete sentences immediately for TTS (never past the cap)
+                # (। = Hindi danda — without it Hindi replies would never flush mid-stream)
                 while len(spoken) < max_sentences:
-                    match = re.search(r"^(.*?[.!?])(\s+|$)", buf)
+                    match = re.search(r"^(.*?[.!?।])(\s+|$)", buf)
                     if not match:
                         break
                     sentence = match.group(1).strip()

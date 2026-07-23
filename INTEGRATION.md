@@ -138,7 +138,10 @@ Connect a WebSocket, send `start` with your interviewer prompt, stream mic audio
 agent's audio back. This runs the whole STT → LLM → TTS loop for you.
 
 **Protocol**
-- Send once: `{"event":"start","system_prompt":"<your interviewer instructions>","greet":true}`
+- Send once: `{"event":"start","system_prompt":"<your interviewer instructions>","greet":true,"language":"en"}`
+  - `language`: `"en"` (default) | `"hi"` Hindi | `"te"` Telugu — sets transcription language,
+    makes the agent speak that language, and picks a native default voice (`hf_alpha` Hindi /
+    `te_mms` open-source Telugu) plus native backchannels ("हाँ जी", "సరే").
   - `greet:true` → **the agent opens the conversation** (greets + asks the first question) without
     waiting for the candidate to speak. Optionally pass `"greeting_prompt":"<how to open>"` to
     control the opening line. Omit `greet` (or set false) to have the agent wait for the user first.
@@ -147,7 +150,9 @@ agent's audio back. This runs the whole STT → LLM → TTS loop for you.
 - You receive:
   - binary **PCM16 mono 24 kHz** = agent speech (play it),
   - JSON events: `ready`, `state` (`agent`/`listening`), `partial_transcript`, `transcript`,
-    `agent_text`, `audio_done` (`{sample_rate}`), `turn_done`, `interrupt`.
+    `agent_text`, `audio_meta` (`{sample_rate}` — arrives BEFORE the first audio chunk of a
+    sentence; set your playback rate from it, since voices differ: Kokoro 24k, Telugu MMS 16k),
+    `audio_done` (`{sample_rate}`), `turn_done`, `interrupt`.
 - **Barge-in (full-duplex):** if the user starts talking while the agent is speaking, the server
   stops generation and sends `{"type":"interrupt"}` — on that event you MUST stop every scheduled
   audio buffer immediately so the agent goes silent, then keep streaming the mic as normal.
